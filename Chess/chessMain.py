@@ -30,6 +30,8 @@ def main():
     screen.fill(pg.Color('white'))
 
     gs = chessEngine.GameState()
+    valid_moves = gs.get_valid_moves()
+    move_made = False # Flag variable, preventing overrun of the gs.get_valid_moves() function
 
     load_images() # Only load images once, before entering the while loop
 
@@ -59,15 +61,22 @@ def main():
 
                 if len(player_clicks) == 2:
                     move = chessEngine.Move(player_clicks[0], player_clicks[1], gs.board)
-                    gs.make_move(move)
-                    print(move.get_chess_notation())
+                    if move in valid_moves: # Only allow to make a move when it's valid
+                        gs.make_move(move)
+                        print(move.get_chess_notation())
+                        move_made = True
                     # Deselect and clear player clicks
                     sq_selected = ()
                     player_clicks = []
             # Key handle
             elif e.type == pg.KEYDOWN:
-                if e.key == pg.K_z:
+                if e.key == pg.K_z and (e.mod & (pg.KMOD_META | pg.KMOD_CTRL)): # CMD/CTRL + Z to undo last move
                     gs.unmake_move()
+                    move_made = True # Considering unmake_move() equals to make a (reverse) move
+
+        if move_made: # Regenerate the valid moves after the move is made
+            valid_moves = gs.get_valid_moves()
+            move_made = False
 
         draw_game_state(screen, gs)
 
