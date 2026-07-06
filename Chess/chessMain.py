@@ -47,7 +47,6 @@ def main():
             # Mouse handle
             elif e.type == pg.MOUSEBUTTONDOWN:
                 location = pg.mouse.get_pos() # (x, y) location of the mouse
-
                 col = location[0] // SQ_SIZE
                 row = location[1] // SQ_SIZE
 
@@ -57,6 +56,7 @@ def main():
                     player_clicks = []
                 else:
                     sq_selected = (row, col)
+                    print(sq_selected)
                     player_clicks.append(sq_selected) # Store the square player selected
 
                 if len(player_clicks) == 2:
