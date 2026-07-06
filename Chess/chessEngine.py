@@ -141,27 +141,17 @@ class GameState:
                 # Move up 2 squares from the starting position
                 if row == start_row and self.board[row + 2 * move_amount][col] == '--':
                     possible_moves.append(Move((row, col), (row + 2 * move_amount, col), self.board))
-        # Capture left
-        if col - 1 >= 0:
-            end_piece = self.board[row + move_amount][col - 1]
-            if end_piece[0] == self.enemy_color:
-                if not piece_pinned or pin_direction == (move_amount, -1):
-                    possible_moves.append(Move((row, col), (row + move_amount, col - 1), self.board))
-        # Capture right
-        if col + 1 < 8:
-            end_piece = self.board[row + move_amount][col + 1]
-            if end_piece[0] == self.enemy_color:
-                if not piece_pinned or pin_direction == (move_amount, 1):
-                    possible_moves.append(Move((row, col), (row + move_amount, col + 1), self.board))
+        # Capture to the left and to the right
+        for col_offset in [-1, 1]:
+            new_col = col + col_offset
+            if 0 <= new_col < 8:
+                end_piece = self.board[row + move_amount][new_col]
+                if end_piece != '--' and end_piece[0] != self.friendly_color:
+                    if not piece_pinned or pin_direction == (move_amount, col_offset):
+                        possible_moves.append(Move((row, col), (row + move_amount, new_col), self.board))
+        # Pawn promotion
 
-        # for col_offset in [-1, 1]:
-        #     new_col = col + col_offset
-        #     if 0 <= new_col < 8:
-        #         end_piece = self.board[row + move_amount][new_col]
-        #         if end_piece != '--' and end_piece[0] != self.friendly_color:
-        #             if not piece_pinned or pin_direction == (move_amount, col_offset):
-        #                 possible_moves.append(Move((row, col), (row + move_amount, new_col), self.board))
-        # PLAN: Pawn promotion, en passant
+        # En passant
 
     # Rook, Bishop, and Queen ==> self.get_sliding_moves()
     def get_rook_moves(self, row, col, possible_moves):
