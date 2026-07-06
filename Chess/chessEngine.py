@@ -19,16 +19,22 @@ class GameState:
             ['--', '--', '--', '--', '--', '--', '--', '--'],
             ['--', '--', '--', '--', '--', '--', '--', '--'],
             ['wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP'],
-            ['wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR']
+            ['wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR'],
         ]
         self.move_functions = {
-            'P': self.get_pawn_moves, 'R': self.get_rook_moves, 'B': self.get_bishop_moves,
-            'N': self.get_knight_moves, 'Q': self.get_queen_moves, 'K': self.get_king_moves,
+            'P': self.get_pawn_moves,
+            'R': self.get_rook_moves,
+            'B': self.get_bishop_moves,
+            'N': self.get_knight_moves,
+            'Q': self.get_queen_moves,
+            'K': self.get_king_moves,
         }
         self.white_to_move = True
         self.move_log = []
         self.white_king_location = (7, 4)
         self.black_king_location = (0, 4)
+        self.is_checkmate = False
+        self.is_stalemate = False
         self.in_check = False
         self.pins = []
         self.checks = []
@@ -74,7 +80,9 @@ class GameState:
     def get_valid_moves(self):
         moves = []
         self.in_check, self.pins, self.checks = self.check_pins_checks()
-        king_row, king_col = self.white_king_location if self.white_to_move else self.black_king_location
+        king_row, king_col = (
+            self.white_king_location if self.white_to_move else self.black_king_location
+        )
         if self.in_check:
             if len(self.checks) == 1: # Only 1 check => Block check or Move King
                 # Block the check --> Move a piece into one of the squares between the checking piece and the king
@@ -88,9 +96,13 @@ class GameState:
                     valid_squares = [(check_row, check_col)]
                 else:
                     for i in range(1, 8):
-                        valid_square = (king_row + check[2] * i, king_col + check[3] * i) # check[2] and [3] is the direction
+                        # check[2] and [3] is the direction
+                        valid_square = (
+                            king_row + check[2] * i,
+                            king_col + check[3] * i,
+                        )
                         valid_squares.append(valid_square)
-                        if valid_square == (check_row, check_col): # Once get to the piece_checking
+                        if valid_square == (check_row, check_col): # Reaching the checking piece
                             break
                 # Remove any moves that don't block check, capture piece, or move King
                 for i in range(len(moves) - 1, -1, -1):
@@ -101,10 +113,16 @@ class GameState:
                 self.get_king_moves(king_row, king_col, moves)
         else:
             moves = self.get_all_possible_moves()
+        # Check for Checkmate and Stalemate before return valid moves
+        if len(moves) == 0: # Neither Checkmate nor Stalemate
+            if self.in_check:
+                self.is_checkmate = True
+            else:
+                self.is_stalemate = True
+        else:
+            self.is_checkmate = False
+            self.is_stalemate = False
         return moves
-
-
-
 
     '''
     All possible moves without considering checks and pinned pieces
@@ -114,13 +132,16 @@ class GameState:
         for row in range(len(self.board)):
             for col in range(len(self.board[row])):
                 turn = self.board[row][col][0]
-                if (turn == 'w' and self.white_to_move) or (turn == 'b' and not self.white_to_move):
+                if (turn == 'w' and self.white_to_move) or (
+                    turn == 'b' and not self.white_to_move
+                ):
                     piece = self.board[row][col][1]
                     self.move_functions[piece](row, col, possible_moves)
         return possible_moves
 
     '''
-    Get all possible move of each piece at (row, col) and add these moves to the possible_moves list
+    Get all possible move of each piece at (row, col)
+    and add these moves to the possible_moves list
     '''
     # Pawn
     def get_pawn_moves(self, row, col, possible_moves):
@@ -140,7 +161,9 @@ class GameState:
                 possible_moves.append(Move((row, col), (row + move_amount, col), self.board))
                 # Move up 2 squares from the starting position
                 if row == start_row and self.board[row + 2 * move_amount][col] == '--':
-                    possible_moves.append(Move((row, col), (row + 2 * move_amount, col), self.board))
+                    possible_moves.append(
+                        Move((row, col), (row + 2 * move_amount, col), self.board)
+                    )
         # Capture to the left and to the right
         for col_offset in [-1, 1]:
             new_col = col + col_offset
@@ -148,7 +171,9 @@ class GameState:
                 end_piece = self.board[row + move_amount][new_col]
                 if end_piece != '--' and end_piece[0] != self.friendly_color:
                     if not piece_pinned or pin_direction == (move_amount, col_offset):
-                        possible_moves.append(Move((row, col), (row + move_amount, new_col), self.board))
+                        possible_moves.append(
+                            Move((row, col), (row + move_amount, new_col), self.board)
+                        )
         # Pawn promotion
 
         # En passant
@@ -185,15 +210,19 @@ class GameState:
                 end_col += direction[1]
                 if self.is_on_board(end_row, end_col): # check if the square on the board
                     if (
-                        not piece_pinned or
-                        pin_direction == (direction[0], direction[1]) or
-                        pin_direction == (-direction[0], -direction[1])
+                        not piece_pinned
+                        or pin_direction == (direction[0], direction[1])
+                        or pin_direction == (-direction[0], -direction[1])
                     ):
                         end_piece = self.board[end_row][end_col]
                         if end_piece == '--': # Empty square
-                            possible_moves.append(Move((row, col), (end_row, end_col), self.board))
+                            possible_moves.append(
+                                Move((row, col), (end_row, end_col), self.board)
+                            )
                         elif self.friendly_color != end_piece[0]: # Compromised square with opponent piece
-                            possible_moves.append(Move((row, col), (end_row, end_col), self.board))
+                            possible_moves.append(
+                                Move((row, col), (end_row, end_col), self.board)
+                            )
                             break
                         else: # Compromised square with friendly piece
                             break
@@ -202,7 +231,12 @@ class GameState:
 
     # Knight
     def get_knight_moves(self, row, col, possible_moves):
-        moves = ((-2, -1), (-2, 1), (2, -1), (2, 1), (-1, -2), (1, -2), (-1, 2), (1, 2))
+        moves = (
+            (-2, -1), (-2, 1),
+            (2, -1), (2, 1),
+            (-1, -2), (1, -2),
+            (-1, 2), (1, 2),
+        )
         # Pinned Check
         piece_pinned = False
         for i in range(len(self.pins) - 1, -1, -1):
@@ -216,7 +250,9 @@ class GameState:
                 if not piece_pinned:
                     end_piece = self.board[end_row][end_col]
                     if end_piece[0] != self.friendly_color:
-                        possible_moves.append(Move((row, col), (end_row, end_col), self.board))
+                        possible_moves.append(
+                            Move((row, col), (end_row, end_col), self.board)
+                        )
 
     # King
     def get_king_moves(self, row, col, possible_moves):
@@ -235,7 +271,9 @@ class GameState:
                         self.black_king_location = (end_row, end_col)
                     in_check, pins, checks = self.check_pins_checks() # Begin the check
                     if not in_check:
-                        possible_moves.append(Move((row, col), (end_row, end_col), self.board))
+                        possible_moves.append(
+                            Move((row, col), (end_row, end_col), self.board)
+                        )
                     # Return the King to the original square
                     if self.friendly_color == 'w':
                         self.white_king_location = (row, col)
@@ -254,7 +292,16 @@ class GameState:
             row, col = self.black_king_location
         # From the king, check outward for pins and checks; simultaneously, keep track on the pins
         # Check for all pieces checks except Knights: Rooks, Bishops, Pawns
-        directions = ((-1, 0), (0, -1), (1, 0), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1))
+        directions = (
+            (-1, 0),
+            (0, -1),
+            (1, 0),
+            (0, 1),
+            (-1, -1),
+            (-1, 1),
+            (1, -1),
+            (1, 1),
+        )
         for i in range(len(directions)):
             direction = directions[i]
             possible_pins = () # reset for each direction
@@ -279,14 +326,18 @@ class GameState:
                         - Any direction 1 square away   from King is a King
                         '''
                         if (
-                            (0 <= i <= 3 and enemy_piece_type == 'R') or
-                            (4 <= i <= 7 and enemy_piece_type == 'B') or
-                            (j == 1 and enemy_piece_type == 'P' and (
-                                (enemy_color == 'b' and 4 <= i <= 5) or
-                                (enemy_color == 'w' and 6 <= i <= 7)
-                            )) or
-                            (enemy_piece_type == 'Q') or
-                            (j == 1 and enemy_piece_type == 'K')
+                            (0 <= i <= 3 and enemy_piece_type == 'R')
+                            or (4 <= i <= 7 and enemy_piece_type == 'B')
+                            or (
+                                j == 1
+                                and enemy_piece_type == 'P'
+                                and (
+                                        (enemy_color == 'b' and 4 <= i <= 5)
+                                        or (enemy_color == 'w' and 6 <= i <= 7)
+                                )
+                            )
+                            or (enemy_piece_type == 'Q')
+                            or (j == 1 and enemy_piece_type == 'K')
                         ):
                             if len(possible_pins) == 0: # No piece's blocking ==> Checkmate
                                 in_check = True
@@ -300,7 +351,12 @@ class GameState:
                 else: # Off board
                     break
         # Check for Knight checks
-        knight_moves = ((-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1))
+        knight_moves = (
+            (-2, -1), (-2, 1),
+            (-1, -2), (-1, 2),
+            (1, -2), (1, 2),
+            (2, -1), (2, 1),
+        )
         for move in knight_moves:
             end_row = row + move[0]
             end_col = col + move[1]
@@ -318,12 +374,24 @@ class GameState:
 class Move:
     # Dictionary to translate rows and cols to ranks and files of chess notation
     rows_to_ranks = {
-        0: '8', 1: '7', 2: '6', 3: '5',
-        4: '4', 5: '3', 6: '2', 7: '1',
+        0: '8',
+        1: '7',
+        2: '6',
+        3: '5',
+        4: '4',
+        5: '3',
+        6: '2',
+        7: '1',
     }
     cols_to_files = {
-        0: 'a', 1: 'b', 2: 'c', 3: 'd',
-        4: 'e', 5: 'f', 6: 'g', 7: 'h',
+        0: 'a',
+        1: 'b',
+        2: 'c',
+        3: 'd',
+        4: 'e',
+        5: 'f',
+        6: 'g',
+        7: 'h',
     }
 
     def __init__(self, start_sq, end_sq, board):
@@ -334,7 +402,12 @@ class Move:
 
         self.piece_moved = board[self.start_row][self.start_col]
         self.piece_captured = board[self.end_row][self.end_col]
-        self.move_ID = self.start_row * 1000 + self.start_col * 100 + self.end_row * 10 + self.end_col
+        self.move_ID = (
+            self.start_row * 1000
+            + self.start_col * 100
+            + self.end_row * 10
+            + self.end_col
+        )
 
     def __eq__(self, other):
         if isinstance(other, Move):
