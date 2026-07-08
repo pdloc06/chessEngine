@@ -3,7 +3,7 @@ Main driver: handling user input and displaying current GameState object.
 """
 
 import pygame as pg
-from Chess import chess_engine
+from chess import chess_engine
 
 WIDTH = HEIGHT = 512
 DIMENSION = 8 # Dimensions of a chess board are 8x8
