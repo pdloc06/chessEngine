@@ -231,6 +231,17 @@ class GameState:
         else:
             self.is_checkmate = False
             self.is_stalemate = False
+        # Double check en passant moves for hidden horizontal pins
+        # En-passant horizontal pins: bR(a5) --- wP(f5) - bP(g5) --- wK(h5).
+        for i in range(len(moves) - 1, -1, -1):
+            if moves[i].move_type == Move.EN_PASSANT:
+                self.make_move(moves[i])
+                self.white_to_move = not self.white_to_move  # Switch turn back to check friendly King
+                in_check, _, _ = self.check_pins_checks()
+                self.white_to_move = not self.white_to_move  # Revert turn switch
+                self.unmake_move()
+                if in_check:
+                    moves.remove(moves[i])
         return moves
 
     '''
