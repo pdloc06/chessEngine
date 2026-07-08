@@ -9,18 +9,10 @@ WIDTH = HEIGHT = 512
 DIMENSION = 8 # Dimensions of a chess board are 8x8
 SQ_SIZE = WIDTH // DIMENSION
 MAX_FPS = 20
-IMAGES = {}
+IMAGES = {} # Storing chess pieces' images
 
 '''
-Initialize a global dictionary of images
-'''
-def load_images():
-    pieces = ['bB', 'bK', 'bN', 'bP', 'bQ', 'bR', 'wB', 'wK', 'wN', 'wP', 'wQ', 'wR']
-    for piece in pieces:
-        IMAGES[piece] = pg.transform.smoothscale(pg.image.load('images/' + piece + '.png'), (SQ_SIZE, SQ_SIZE))
-
-'''
-Main driver: handling user input and updating the graphics
+Handling user input and updating the graphics
 '''
 def main():
     pg.init()
@@ -117,6 +109,17 @@ def draw_pieces(screen, board):
             if piece != '--': # Not empty square
                 screen.blit(IMAGES[piece], pg.Rect(col * SQ_SIZE, row * SQ_SIZE, SQ_SIZE, SQ_SIZE))
 
+'''
+Initialize a global dictionary of images
+'''
+# PLAN: Add switch pieces' type feature
+def load_images(pieces_type='standard'):
+    pieces = ['bB', 'bK', 'bN', 'bP', 'bQ', 'bR', 'wB', 'wK', 'wN', 'wP', 'wQ', 'wR']
+    for piece in pieces:
+        IMAGES[piece] = pg.transform.smoothscale(
+            pg.image.load('pieces/' + pieces_type + '/' + piece + '.png'),
+            (SQ_SIZE, SQ_SIZE),
+        )
 
 if __name__ == '__main__':
     main()
