@@ -1,6 +1,7 @@
 """
 Main driver: handling user input and displaying current GameState object.
 """
+from string import whitespace
 
 import pygame as pg
 from chess import chess_engine
@@ -105,11 +106,11 @@ def main():
         if gs.is_checkmate:
             game_over = True
             if gs.white_to_move:
-                black_wins = False
-                winning_animation(screen, gs, black_wins)
+                white_wins = False
+                winning_animation(screen, gs, white_wins)
             else:
-                black_wins = True
-                winning_animation(screen, gs, black_wins)
+                white_wins = True
+                winning_animation(screen, gs, white_wins)
         elif gs.is_stalemate:
             game_over = True
             stalemate_animation(screen, gs)
@@ -244,10 +245,10 @@ def animate_move(move, screen, board, clock, move_unmake=False):
 '''
 Animation for checkmate
 '''
-def winning_animation(screen, gs, black_wins):
+def winning_animation(screen, gs, white_wins):
     # Store 2 Kings' location based on boolean varial black_wins
-    win_king_location = gs.white_king_location if black_wins else gs.black_king_location
-    lose_king_location = gs.black_king_location if black_wins else gs.white_king_location
+    win_king_location = gs.white_king_location if white_wins else gs.black_king_location
+    lose_king_location = gs.black_king_location if white_wins else gs.white_king_location
     # Draw red overlay for the losing King
     red_surface = pg.Surface((SQ_SIZE, SQ_SIZE), pg.SRCALPHA)
     red_surface.fill((255, 0, 0, 150))  # Red with 150 transparency
