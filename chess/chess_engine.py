@@ -89,6 +89,17 @@ class GameState:
                 self.black_castle_queen_side
             )
         ]
+        # Store coords of all pieces (without type) => addressing searching loop problem
+        self.white_pieces = []
+        self.black_pieces = []
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece != '--':
+                    if piece[0] == 'w':
+                        self.white_pieces.append((row, col))
+                    else:
+                        self.black_pieces.append((row, col))
 
     @staticmethod
     def is_on_board(row, col):
@@ -141,6 +152,32 @@ class GameState:
                 self.board[move.end_row][move.end_col + 1] = self.board[move.end_row][move.end_col - 2] # Move Rook
                 self.board[move.end_row][move.end_col - 2] = '--' # Empty space where Rook was
 
+        '''Handling pieces' coords list'''
+        # Identify list of friendly_pieces and enemy_pieces
+        is_white_moved = not self.white_to_move
+        friendly_pieces = self.white_pieces if is_white_moved else self.black_pieces
+        enemy_pieces = self.black_pieces if is_white_moved else self.white_pieces
+
+        # Update coords of the moved piece
+        friendly_pieces.remove((move.start_row, move.start_col))
+        friendly_pieces.append((move.end_row, move.end_col))
+
+        # Delete coords of the captured piece (if any)
+        if move.piece_captured != '--':
+            if move.move_type == Move.EN_PASSANT:
+                enemy_pieces.remove((move.start_row, move.end_col))
+            else:
+                enemy_pieces.remove((move.end_row, move.end_col))
+
+        # Update coords of the Rook if castling move
+        if move.move_type == Move.CASTLE:
+            if move.end_col - move.start_col == 2:  # King side
+                friendly_pieces.remove((move.end_row, move.end_col + 1))  # Delete Rook's old coords
+                friendly_pieces.append((move.end_row, move.end_col - 1))  # Add new coords
+            else:  # Queen side
+                friendly_pieces.remove((move.end_row, move.end_col - 2))
+                friendly_pieces.append((move.end_row, move.end_col + 1))
+
     def unmake_move(self):
         if len(self.move_log) != 0: # There are move to unmake
             last_move = self.move_log.pop()
@@ -183,6 +220,30 @@ class GameState:
                     )
                     self.board[last_move.end_row][last_move.end_col + 1] = '--'  # Empty space where Rook was
 
+        '''Handling pieces' coords list'''
+        my_pieces = self.white_pieces if self.white_to_move else self.black_pieces
+        enemy_pieces = self.black_pieces if self.white_to_move else self.white_pieces
+
+        # Return pieces' coords to the start coords
+        my_pieces.remove((last_move.end_row, last_move.end_col))
+        my_pieces.append((last_move.start_row, last_move.start_col))
+
+        # Return captured piece (if any)
+        if last_move.piece_captured != '--':
+            if last_move.move_type == Move.EN_PASSANT:
+                enemy_pieces.append((last_move.start_row, last_move.end_col))
+            else:
+                enemy_pieces.append((last_move.end_row, last_move.end_col))
+
+        # Return castle pieces to their original positions
+        if last_move.move_type == Move.CASTLE:
+            if last_move.end_col - last_move.start_col == 2:  # King side
+                my_pieces.remove((last_move.end_row, last_move.end_col - 1))  # Remove new rook
+                my_pieces.append((last_move.end_row, last_move.end_col + 1))  # Return old rook
+            else:  # Queen side
+                my_pieces.remove((last_move.end_row, last_move.end_col + 1))
+                my_pieces.append((last_move.end_row, last_move.end_col - 2))
+
     '''
     All possible moves after considering checks and pinned pieces
     '''
@@ -217,7 +278,7 @@ class GameState:
                 for i in range(len(moves) - 1, -1, -1):
                     if moves[i].piece_moved[1] != 'K': # Move doesn't move the King
                         if (moves[i].end_row, moves[i].end_col) not in valid_squares: # Move doesn't block check/capture
-                            moves.remove(moves[i])
+                            del moves[i]
             else: # Double check => King has to move
                 self.get_king_moves(king_row, king_col, moves)
         else: # Not in check
@@ -241,7 +302,7 @@ class GameState:
                 self.white_to_move = not self.white_to_move  # Revert turn switch
                 self.unmake_move()
                 if in_check:
-                    moves.remove(moves[i])
+                    del moves[i]
         return moves
 
     '''
@@ -249,16 +310,12 @@ class GameState:
     '''
     def get_all_possible_moves(self):
         possible_moves = []
-        for row in range(len(self.board)):
-            for col in range(len(self.board[row])):
-                turn = self.board[row][col][0]
-                if (turn == 'w' and self.white_to_move) or (
-                    turn == 'b' and not self.white_to_move
-                ):
-                    piece = self.board[row][col][1]
-                    self.move_functions[piece](row, col, possible_moves)
-                    if piece == 'K':
-                        self.get_castle_moves(row, col, possible_moves)
+        active_pieces = self.white_pieces if self.white_to_move else self.black_pieces
+        for row, col in active_pieces:
+            piece = self.board[row][col][1]  # Piece's type: P, R, N, B, Q, K
+            self.move_functions[piece](row, col, possible_moves)
+            if piece == 'K':
+                self.get_castle_moves(row, col, possible_moves)
         return possible_moves
 
     '''
@@ -278,7 +335,7 @@ class GameState:
             if self.pins[i][0] == row and self.pins[i][1] == col:
                 piece_pinned = True
                 pin_direction = (self.pins[i][2], self.pins[i][3])
-                self.pins.remove(self.pins[i]) # Prevent Duplicates
+                del self.pins[i] # Prevent Duplicates
                 break
         # Move up 1 square
         if self.board[row + move_amount][col] == '--':
@@ -338,7 +395,7 @@ class GameState:
                 piece_pinned = True
                 pin_direction = (self.pins[i][2], self.pins[i][3])
                 if self.board[row][col][1] != 'Q':
-                    self.pins.remove(self.pins[i])
+                    del self.pins[i]
                 break
         for d in directions:
             end_row = row
@@ -379,7 +436,7 @@ class GameState:
         for i in range(len(self.pins) - 1, -1, -1):
             if self.pins[i][0] == row and self.pins[i][1] == col:
                 piece_pinned = True
-                self.pins.remove(self.pins[i])
+                del self.pins[i]
                 break
         for move in moves:
             end_row = row + move[0]
