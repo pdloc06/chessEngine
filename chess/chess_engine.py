@@ -47,12 +47,7 @@ class GameState:
             ['wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP'],
             ['wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR'],
         ]
-        # The board is a 8x8 2D list, each element of the list has 2 characters:
-        # The 1st char indicates the color of the piece ('b' OR 'w')
-        # The 2nd char indicates the type of the piece ('B', 'K', 'N', 'P', 'Q', and 'R')
-        # '--' represents an empty square
-
-        self.white_to_move = True  # Turn flag
+        self.white_to_move = True
         self.move_functions = {
             'P': self.get_pawn_moves,
             'R': self.get_rook_moves,
@@ -107,6 +102,30 @@ class GameState:
                         self.white_pieces.add((row, col))
                     else:
                         self.black_pieces.add((row, col))
+
+        # Variables tracking the 50-move rule status
+        self.halfmove_clock = 0
+        self.halfmove_clock_log = []
+
+        # Variables tracking threefold repetition status
+        self.state_counts = {}
+        self.state_log = []
+
+        # Hash and store the absolute initial state configuration
+        initial_state = self.get_board_state_string()
+        self.state_counts[initial_state] = 1
+        self.state_log.append(initial_state)
+
+    def get_board_state_string(self) -> str:
+        """
+        Generate a unique string hash of the current board state configuration.
+        Captures piece arrangements, en-passant squares, castling rights, and current turn.
+        """
+        board_str = "".join(["".join(row) for row in self.board])
+        ep_str = str(self.enpassant_possible)
+        castle_str = f"{int(self.white_castle_king_side)}{int(self.white_castle_queen_side)}{int(self.black_castle_king_side)}{int(self.black_castle_queen_side)}"
+        turn = 'w' if self.white_to_move else 'b'
+        return f"{board_str}_{ep_str}_{castle_str}_{turn}"
 
     @staticmethod
     def is_on_board(row: int, col: int) -> bool:
@@ -168,6 +187,15 @@ class GameState:
             If True, calculates check status for notation.
             Set to False during simulation/validation moves for performance.
         """
+        # Cache the current half-move clock value before any mutations
+        self.halfmove_clock_log.append(self.halfmove_clock)
+
+        # Reset half-move clock on any pawn advance or active capture
+        if move.piece_moved[1] == 'P' or move.piece_captured != '--':
+            self.halfmove_clock = 0
+        else:
+            self.halfmove_clock += 1
+
         self.enpassant_possible_log.append(self.enpassant_possible)
         self.board[move.start_row][move.start_col] = '--'
         self.board[move.end_row][move.end_col] = move.piece_moved
@@ -233,10 +261,15 @@ class GameState:
                 friendly_pieces.remove((move.end_row, move.end_col - 2))
                 friendly_pieces.add((move.end_row, move.end_col + 1))
 
-        # Check if the move puts the opponent in check for notation
+        # Check analysis is bypassed if evaluate/simulation is requested by AI
         if annotate:
             in_check, _, _ = self.check_pins_checks()
             move.is_check = in_check
+
+        # Log and increment the current board layout frequency for repetition check
+        current_state = self.get_board_state_string()
+        self.state_log.append(current_state)
+        self.state_counts[current_state] = self.state_counts.get(current_state, 0) + 1
 
     def unmake_move(self) -> None:
         """
@@ -246,6 +279,15 @@ class GameState:
         to their exact state before the previous move was executed.
         """
         if len(self.move_log) != 0: # Ensure there is a move to unmake
+            # Revert the current layout string frequency allocation
+            current_state = self.state_log.pop()
+            self.state_counts[current_state] -= 1
+            if self.state_counts[current_state] == 0:
+                del self.state_counts[current_state]
+
+            # Revert the half-move clock back to its historical index
+            self.halfmove_clock = self.halfmove_clock_log.pop()
+
             last_move = self.move_log.pop()
             self.board[last_move.start_row][last_move.start_col] = last_move.piece_moved
             self.board[last_move.end_row][last_move.end_col] = last_move.piece_captured
@@ -322,7 +364,7 @@ class GameState:
         """
         pass
 
-    def get_valid_moves(self) -> list['Move']:
+    def get_valid_moves(self, for_ai: bool = False) -> list['Move']:
         """
         Generate all legal moves in the current position.
 
@@ -380,6 +422,37 @@ class GameState:
         else:
             self.is_checkmate = False
             self.is_stalemate = False
+
+            # Enforce 50-move standard clock limits and threefold matching checks
+            current_state = self.get_board_state_string()
+            if self.halfmove_clock >= 100 or self.state_counts.get(current_state, 0) >= 3:
+                self.is_stalemate = True
+                moves = []  # Immediately cease operation and return empty list on draw
+
+            # Resolve Ambiguous Notation (Bypassed entirely if generated for AI node processing)
+        if not for_ai and len(moves) > 0:
+            move_map = {}
+            for move in moves:
+                if move.piece_moved[1] != 'P':
+                    key = (move.piece_moved, move.end_row, move.end_col)
+                    if key not in move_map:
+                        move_map[key] = []
+                    move_map[key].append(move)
+
+            for key, matching_moves in move_map.items():
+                if len(matching_moves) > 1:
+                    for move in matching_moves:
+                        cols = [m.start_col for m in matching_moves]
+                        if cols.count(move.start_col) == 1:
+                            move.disambiguation = Move.COLS_TO_FILES[move.start_col]
+                        else:
+                            rows = [m.start_row for m in matching_moves]
+                            if rows.count(move.start_row) == 1:
+                                move.disambiguation = Move.ROWS_TO_RANKS[move.start_row]
+                            else:
+                                move.disambiguation = (
+                                    Move.COLS_TO_FILES[move.start_col] + Move.ROWS_TO_RANKS[move.start_row]
+                                )
 
         # Double-check en-passant moves for hidden horizontal pins
         # Example: bR(a5) --- wP(f5) - bP(g5) --- wK(h5).
@@ -993,6 +1066,9 @@ class Move:
         if self.move_type == self.EN_PASSANT:
             self.piece_captured = 'bP' if self.piece_moved == 'wP' else 'wP'
 
+        # Property storing ambiguity notation context if evaluated during UI rendering
+        self.disambiguation = ''
+
     @classmethod
     def normal(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
         """Construct a standard move."""
@@ -1101,6 +1177,9 @@ class Move:
             # Use standard piece letters instead of unicode symbols
             if self.piece_moved[1] != 'P':
                 notation = self.piece_moved[1]
+                # Append file or rank modifier if ambiguous targeting is found
+                if self.disambiguation:
+                    notation += self.disambiguation
 
             # Handling captures
             if self.piece_captured != '--':
