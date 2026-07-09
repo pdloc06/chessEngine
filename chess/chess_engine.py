@@ -151,7 +151,7 @@ class GameState:
         """
         return 'b' if self.white_to_move else 'w'
 
-    def make_move(self, move: 'Move') -> None:
+    def make_move(self, move: 'Move', annotate: bool = True) -> None:
         """
         Execute a chess move on the board and update the game state.
 
@@ -164,6 +164,9 @@ class GameState:
         move : Move
             The Move object containing source, destination, and type information
             of the move to be executed.
+        annotate : bool, optional
+            If True, calculates check status for notation.
+            Set to False during simulation/validation moves for performance.
         """
         self.enpassant_possible_log.append(self.enpassant_possible)
         self.board[move.start_row][move.start_col] = '--'
@@ -229,6 +232,11 @@ class GameState:
             else:  # Queen side
                 friendly_pieces.remove((move.end_row, move.end_col - 2))
                 friendly_pieces.add((move.end_row, move.end_col + 1))
+
+        # Check if the move puts the opponent in check for notation
+        if annotate:
+            in_check, _, _ = self.check_pins_checks()
+            move.is_check = in_check
 
     def unmake_move(self) -> None:
         """
@@ -377,7 +385,7 @@ class GameState:
         # Example: bR(a5) --- wP(f5) - bP(g5) --- wK(h5).
         for i in range(len(moves) - 1, -1, -1):
             if moves[i].move_type == Move.EN_PASSANT:
-                self.make_move(moves[i])
+                self.make_move(moves[i], annotate=False)
                 self.white_to_move = not self.white_to_move  # Temporarily switch turn back to evaluate check
                 in_check, _, _ = self.check_pins_checks()
                 self.white_to_move = not self.white_to_move  # Revert turn switch
@@ -429,17 +437,30 @@ class GameState:
             piece_pinned = True
             pin_direction = self.pins[(row, col)]
 
+        def _add_move(end_row: int, end_col: int) -> None:
+            """
+            Helper function to handle adding a normal move or 4 promotion moves.
+            """
+            if _is_back_row:
+                for piece in ['Q', 'R', 'B', 'N']:
+                    possible_moves.append(
+                        Move.promotion(
+                            (row, col),
+                            (end_row, end_col),
+                            self.board, promotion_piece=piece
+                        )
+                    )
+            else:
+                possible_moves.append(
+                    Move.normal((row, col), (end_row, end_col), self.board)
+                )
+
         # Move up 1 square
         if self.board[row + move_amount][col] == '--':
             if not piece_pinned or pin_direction == (-1, 0) or pin_direction == (1, 0):
-                if _is_back_row:
-                    possible_moves.append(
-                        Move.promotion((row, col), (row + move_amount, col), self.board)
-                    )
-                else:
-                    possible_moves.append(
-                        Move.normal((row, col), (row + move_amount, col), self.board)
-                    )
+                # Use the helper function for forward moves
+                _add_move(row + move_amount, col)
+
                 # Move up 2 squares from the starting position
                 if row == start_row and self.board[row + 2 * move_amount][col] == '--':
                     possible_moves.append(
@@ -453,14 +474,9 @@ class GameState:
                 if not piece_pinned or pin_direction == (move_amount, col_offset):
                     end_piece = self.board[row + move_amount][new_col]
                     if end_piece[0] == self.enemy_color:
-                        if _is_back_row:
-                            possible_moves.append(
-                                Move.promotion((row, col), (row + move_amount, new_col), self.board)
-                            )
-                        else:
-                            possible_moves.append(
-                                Move.normal((row, col), (row + move_amount, new_col), self.board)
-                            )
+                        # Use the helper function for capture moves
+                        _add_move(row + move_amount, new_col)
+
                     # Handle en-passant logic
                     if (row + move_amount, new_col) == self.enpassant_possible:
                         possible_moves.append(
@@ -1070,6 +1086,8 @@ class Move:
     def get_chess_notation(self) -> str:
         """
         Construct the algebraic chess notation string for the move.
+        Uses standard English letters (N, B, R, Q, K) to avoid missing
+        Unicode character issues (rendering as boxes) in pygame default fonts.
 
         Returns
         -------
@@ -1077,23 +1095,31 @@ class Move:
             The algebraic notation representing the move executed.
         """
         if self.is_castle_move:
-            return 'O-O' if self.end_col > self.start_col else 'O-O-O'
+            notation = 'O-O' if self.end_col > self.start_col else 'O-O-O'
+        else:
+            notation = ''
+            # Use standard piece letters instead of unicode symbols
+            if self.piece_moved[1] != 'P':
+                notation = self.piece_moved[1]
 
-        if self.piece_moved and self.piece_moved[1] != 'P':
-            notation = self.piece_moved[1]
-        else:  # Pawn capture: '[start_file]x[end_file][end_rank]'
-            notation = self.COLS_TO_FILES[self.start_col] if self.piece_captured != '--' else ''
+            # Handling captures
+            if self.piece_captured != '--':
+                if self.piece_moved[1] == 'P':
+                    notation += self.COLS_TO_FILES[self.start_col]
+                notation += 'x'
 
-        # Handling captures
-        if self.piece_captured != '--':
-            notation += 'x'
+            # Generate standard destination suffix
+            notation += self.get_file_rank(self.end_row, self.end_col)
 
-        # PLAN: Add '#' to the notation if the move results in a checkmate
+            if self.is_pawn_promotion:
+                notation += '=' + self.promotion_piece
 
-        # Generate standard destination suffix
-        notation += self.get_file_rank(self.end_row, self.end_col)
-        if self.is_pawn_promotion:
-            notation += '=' + self.promotion_piece
+        # Append check or checkmate symbols
+        if getattr(self, 'is_checkmate', False):
+            notation += '#'
+        elif getattr(self, 'is_check', False):
+            notation += '+'
+
         return notation
 
 
