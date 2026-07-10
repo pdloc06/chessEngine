@@ -25,6 +25,341 @@ Usage example of the module:
 >>> valid_moves = gs.get_valid_moves()
 """
 
+
+from dataclasses import dataclass
+
+
+@dataclass
+class CastleRights:
+    """
+    Data wrapper for storing castling privileges at a specific game state.
+    """
+
+    def __init__(
+        self,
+        white_king_side: bool,
+        white_queen_side: bool,
+        black_king_side: bool,
+        black_queen_side: bool
+    ) -> None:
+        """
+        Initialize the castle rights log entry.
+
+        Parameters
+        ----------
+        white_king_side : bool
+            True if white can castle king-side.
+        white_queen_side : bool
+            True if white can castle queen-side.
+        black_king_side : bool
+            True if black can castle king-side.
+        black_queen_side : bool
+            True if black can castle queen-side.
+        """
+        self.white_king_side = white_king_side
+        self.white_queen_side = white_queen_side
+        self.black_king_side = black_king_side
+        self.black_queen_side = black_queen_side
+
+
+class Move:
+    """
+    Representation of a single chess move.
+
+    Stores source and destination squares, move type constraints, and provides
+    functions to convert movements into standard chess notation.
+    """
+    NORMAL = 'normal'
+    EN_PASSANT = 'en_passant'
+    CASTLE = 'castle'
+    PROMOTION = 'promotion'
+
+    # Dictionary to translate rows and cols to ranks and files of chess notation
+    ROWS_TO_RANKS = {
+        0: '8',
+        1: '7',
+        2: '6',
+        3: '5',
+        4: '4',
+        5: '3',
+        6: '2',
+        7: '1',
+    }
+    COLS_TO_FILES = {
+        0: 'a',
+        1: 'b',
+        2: 'c',
+        3: 'd',
+        4: 'e',
+        5: 'f',
+        6: 'g',
+        7: 'h',
+    }
+
+    def __init__(
+        self,
+        start_sq: tuple[int, int],
+        end_sq: tuple[int, int],
+        board: list[list[str]],
+        move_type: str = 'normal',
+        promotion_piece: str = 'Q'
+    ) -> None:
+        """
+        Initialize a Move object with its state and properties.
+
+        Parameters
+        ----------
+        start_sq : tuple of int
+            The starting coordinate (row, col) of the move.
+        end_sq : tuple of int
+            The destination coordinate (row, col) of the move.
+        board : list of list of str
+            The board array to extract piece information.
+        move_type : str, optional
+            The special classification of the move. Default is 'normal'.
+        promotion_piece : str, optional
+            The piece selected if a pawn promotes. Default is 'Q'.
+        """
+        self.start_row = start_sq[0]
+        self.start_col = start_sq[1]
+        self.end_row = end_sq[0]
+        self.end_col = end_sq[1]
+
+        self.piece_moved = board[self.start_row][self.start_col]
+        self.piece_captured = board[self.end_row][self.end_col]
+
+        self.move_type = move_type
+        self.promotion_piece = promotion_piece
+
+        if self.move_type == self.EN_PASSANT:
+            self.piece_captured = 'bP' if self.piece_moved == 'wP' else 'wP'
+
+        # Property storing ambiguity notation context if evaluated during UI rendering
+        self.disambiguation = ''
+
+    @classmethod
+    def normal(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
+        """
+        Construct a standard normal move.
+
+        Parameters
+        ----------
+        start_sq : tuple of int
+            The starting coordinate (row, col).
+        end_sq : tuple of int
+            The destination coordinate (row, col).
+        board : list of list of str
+            The current board array.
+
+        Returns
+        -------
+        Move
+            A new Move instance classified as NORMAL.
+        """
+        return cls(start_sq, end_sq, board, move_type=cls.NORMAL)
+
+    @classmethod
+    def en_passant(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
+        """
+        Construct an en-passant capture move.
+
+        Parameters
+        ----------
+        start_sq : tuple of int
+            The starting coordinate (row, col).
+        end_sq : tuple of int
+            The destination coordinate (row, col).
+        board : list of list of str
+            The current board array.
+
+        Returns
+        -------
+        Move
+            A new Move instance classified as EN_PASSANT.
+        """
+        return cls(start_sq, end_sq, board, move_type=cls.EN_PASSANT)
+
+    @classmethod
+    def castle(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
+        """
+        Construct a castle move.
+
+        Parameters
+        ----------
+        start_sq : tuple of int
+            The starting coordinate (row, col).
+        end_sq : tuple of int
+            The destination coordinate (row, col).
+        board : list of list of str
+            The current board array.
+
+        Returns
+        -------
+        Move
+            A new Move instance classified as CASTLE.
+        """
+        """Construct a castling move."""
+        return cls(start_sq, end_sq, board, move_type=cls.CASTLE)
+
+    @classmethod
+    def promotion(
+            cls,
+            start_sq: tuple[int, int],
+            end_sq: tuple[int, int],
+            board: list[list[str]],
+            promotion_piece: str = 'Q'
+    ) -> 'Move':
+        """
+        Construct a pawn promotion move.
+
+        Parameters
+        ----------
+        start_sq : tuple of int
+            The starting coordinate (row, col) of the promoting pawn.
+        end_sq : tuple of int
+            The destination coordinate (row, col) on the promotion rank.
+        board : list of list of str
+            The current 2D board array configuration.
+        promotion_piece : str, optional
+            The target chess piece character designated for the promotion
+            (typically 'Q', 'R', 'B', or 'N'). Default is 'Q'.
+
+        Returns
+        -------
+        Move
+            A new Move instance explicitly classified as PROMOTION with the
+            designated target piece type.
+        """
+        return cls(
+            start_sq,
+            end_sq,
+            board,
+            move_type=cls.PROMOTION,
+            promotion_piece=promotion_piece,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Determine equality between this move and another object.
+
+        Parameters
+        ----------
+        other : object
+            The object to compare against.
+
+        Returns
+        -------
+        bool
+            True if the compared object is a matching Move, False otherwise.
+        """
+        if isinstance(other, Move):
+            return (
+                    self.start_row == other.start_row
+                    and self.start_col == other.start_col
+                    and self.end_row == other.end_row
+                    and self.end_col == other.end_col
+                    and self.move_type == other.move_type
+                    and self.promotion_piece == other.promotion_piece
+            )
+        return False
+
+    @property
+    def is_pawn_promotion(self) -> bool:
+        """
+        Check if the move involves a pawn reaching the furthest rank and promoting.
+
+        Returns
+        -------
+        bool
+            True if the internal move type matches PROMOTION, False otherwise.
+        """
+        return self.move_type == self.PROMOTION
+
+    @property
+    def is_enpassant_move(self) -> bool:
+        """
+        Check if the move is a special en-passant diagonal pawn capture.
+
+        Returns
+        -------
+        bool
+            True if the internal move type matches EN_PASSANT, False otherwise.
+        """
+        return self.move_type == self.EN_PASSANT
+
+    @property
+    def is_castle_move(self) -> bool:
+        """
+        Check if the move is a castling maneuver involving both the king and a rook.
+
+        Returns
+        -------
+        bool
+            True if the internal move type matches CASTLE, False otherwise.
+        """
+        return self.move_type == self.CASTLE
+
+    def get_chess_notation(self) -> str:
+        """
+        Construct the algebraic chess notation string for the move.
+        Uses standard English letters (N, B, R, Q, K) to represent the
+        moving piece.
+
+        Returns
+        -------
+        str
+            The algebraic notation representing the move executed.
+        """
+        if self.is_castle_move:
+            notation = 'O-O' if self.end_col > self.start_col else 'O-O-O'
+        else:
+            notation = ''
+
+            if self.piece_moved[1] != 'P':
+                notation = self.piece_moved[1]
+                # Append file or rank modifier if ambiguous targeting is found
+                if self.disambiguation:
+                    notation += self.disambiguation
+
+            # Handling captures
+            if self.piece_captured != '--':
+                if self.piece_moved[1] == 'P':
+                    notation += self.COLS_TO_FILES[self.start_col]
+                notation += 'x'
+
+            # Generate standard destination suffix
+            notation += self._get_file_rank(self.end_row, self.end_col)
+
+            if self.is_pawn_promotion:
+                notation += '=' + self.promotion_piece
+
+        # Append check or checkmate symbols
+        if getattr(self, 'is_checkmate', False):
+            notation += '#'
+        elif getattr(self, 'is_check', False):
+            notation += '+'
+
+        return notation
+
+    def _get_file_rank(self, row: int, col: int) -> str:
+        """
+        Helper to convert matrix coordinates to standard board notations.
+
+        Parameters
+        ----------
+        row : int
+            The row index.
+        col : int
+            The column index.
+
+        Returns
+        -------
+        str
+            The rank and file representation (e.g. 'e4').
+        """
+        return self.COLS_TO_FILES[col] + self.ROWS_TO_RANKS[row]
+
+
 class GameState:
     """
     Store all information about the current state of the game.
@@ -49,12 +384,12 @@ class GameState:
         ]
         self.white_to_move = True
         self.move_functions = {
-            'P': self.get_pawn_moves,
-            'R': self.get_rook_moves,
-            'B': self.get_bishop_moves,
-            'N': self.get_knight_moves,
-            'Q': self.get_queen_moves,
-            'K': self.get_king_moves,
+            'P': self._get_pawn_moves,
+            'R': self._get_rook_moves,
+            'B': self._get_bishop_moves,
+            'N': self._get_knight_moves,
+            'Q': self._get_queen_moves,
+            'K': self._get_king_moves,
         }
 
         # Current Kings' location
@@ -63,6 +398,18 @@ class GameState:
         # Kings' home square
         self.WHITE_KING_HOME_SQUARE = (7, 4)
         self.BLACK_KING_HOME_SQUARE = (0, 4)
+
+        # Tracking active pieces to optimize move generation
+        self.white_pieces = set()
+        self.black_pieces = set()
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece != '--':
+                    if piece[0] == 'w':
+                        self.white_pieces.add((row, col))
+                    else:
+                        self.black_pieces.add((row, col))
 
         self.in_check = False
         self.is_checkmate = False
@@ -91,18 +438,6 @@ class GameState:
             )
         ]
 
-        # Tracking active pieces to optimize move generation
-        self.white_pieces = set()
-        self.black_pieces = set()
-        for row in range(8):
-            for col in range(8):
-                piece = self.board[row][col]
-                if piece != '--':
-                    if piece[0] == 'w':
-                        self.white_pieces.add((row, col))
-                    else:
-                        self.black_pieces.add((row, col))
-
         # Variables tracking the 50-move rule status
         self.halfmove_clock = 0
         self.halfmove_clock_log = []
@@ -112,45 +447,9 @@ class GameState:
         self.state_log = []
 
         # Hash and store the absolute initial state configuration
-        initial_state = self.get_board_state_string()
+        initial_state = self.get_board_state()
         self.state_counts[initial_state] = 1
         self.state_log.append(initial_state)
-
-    def get_board_state_string(self) -> str:
-        """
-        Generate a unique string hash of the current board state configuration.
-
-        Captures piece arrangements, en-passant squares, castling rights, and current turn.
-
-        Returns
-        -------
-        str
-            A unique string representing the exact mathematical state of the board.
-        """
-        board_str = "".join(["".join(row) for row in self.board])
-        ep_str = str(self.enpassant_possible)
-        castle_str = f"{int(self.white_castle_king_side)}{int(self.white_castle_queen_side)}{int(self.black_castle_king_side)}{int(self.black_castle_queen_side)}"
-        turn = 'w' if self.white_to_move else 'b'
-        return f"{board_str}_{ep_str}_{castle_str}_{turn}"
-
-    @staticmethod
-    def is_on_board(row: int, col: int) -> bool:
-        """
-        Check if a given set of coordinates is within the 8x8 board.
-
-        Parameters
-        ----------
-        row : int
-            The row index.
-        col : int
-            The column index.
-
-        Returns
-        -------
-        bool
-            True if coordinates are valid, False otherwise.
-        """
-        return 0 <= row < 8 and 0 <= col < 8
 
     @property
     def friendly_color(self) -> str:
@@ -175,6 +474,114 @@ class GameState:
             'b' if it is white's turn, 'w' otherwise.
         """
         return 'b' if self.white_to_move else 'w'
+
+    def get_valid_moves(self, for_ai: bool = False) -> list['Move']:
+        """
+        Generate all legal moves in the current position.
+
+        Calculates checks and pins to filter pseudo-legal moves, ensuring
+        no move leaves the king in check.
+
+        Returns
+        -------
+        list of Move
+            A list containing all valid, legal moves.
+        """
+        moves = []
+        self.in_check, self.pins, self.checks = self._check_pins_checks()
+        king_row, king_col = (
+            self.white_king_location if self.white_to_move else self.black_king_location
+        )
+        if self.in_check:
+            if len(self.checks) == 1:  # Single check --> Block check, capture piece, or move King
+                moves = self._get_all_possible_moves()
+                check = self.checks[0]
+                check_row, check_col = check[0], check[1]
+                piece_checking = self.board[check_row][check_col]
+                valid_squares = set()
+
+                # If checking piece is a knight, block is impossible; must capture or move king
+                if piece_checking[1] == 'N':
+                    valid_squares = {(check_row, check_col)}
+                else:
+                    for i in range(1, 8):
+                        # check[2] and check[3] --> Check's direction
+                        valid_square = (
+                            king_row + check[2] * i,
+                            king_col + check[3] * i,
+                        )
+                        valid_squares.add(valid_square)
+                        if valid_square == (check_row, check_col):  # Reach the checking piece
+                            break
+
+                # Remove moves that don't satisfy block, capture, or evade logic
+                for i in range(len(moves) - 1, -1, -1):
+                    # Move doesn't move the King
+                    if moves[i].piece_moved[1] != 'K':
+                        # Move doesn't block check or capture
+                        if (moves[i].end_row, moves[i].end_col) not in valid_squares:
+                            del moves[i]
+            else:  # Double check --> King is forced to move
+                self._get_king_moves(king_row, king_col, moves)
+        else:  # Not in check
+            moves = self._get_all_possible_moves()
+
+        # Determine Checkmate or Stalemate statuses
+        if len(moves) == 0:
+            if self.in_check:
+                self.is_checkmate = True
+            else:
+                self.is_stalemate = True
+        else:
+            self.is_checkmate = False
+            self.is_stalemate = False
+
+            # Enforce 50-move standard clock limits and threefold matching checks
+            current_state = self.get_board_state()
+            if self.halfmove_clock >= 100 or self.state_counts.get(current_state, 0) >= 3:
+                self.is_stalemate = True
+                moves = []  # Immediately cease operation and return empty list on draw
+
+        # Resolve Ambiguous Notation (Bypassed entirely if generated for AI node processing)
+        if not for_ai and len(moves) > 0:
+            move_map = {}
+            for move in moves:
+                if move.piece_moved[1] != 'P':
+                    key = (move.piece_moved, move.end_row, move.end_col)
+                    if key not in move_map:
+                        move_map[key] = []
+                    move_map[key].append(move)
+
+            for key, matching_moves in move_map.items():
+                if len(matching_moves) > 1:
+                    for move in matching_moves:
+                        cols = [m.start_col for m in matching_moves]
+                        if cols.count(move.start_col) == 1:
+                            # Distinguished by file (e.g., Ndf3)
+                            move.disambiguation = Move.COLS_TO_FILES[move.start_col]
+                        else:
+                            rows = [m.start_row for m in matching_moves]
+                            if rows.count(move.start_row) == 1:
+                                # Distinguished by rank (e.g., N1f3)
+                                move.disambiguation = Move.ROWS_TO_RANKS[move.start_row]
+                            else:
+                                # Distinguished by both (extremely rare, e.g., Qd4d5)
+                                move.disambiguation = (
+                                    Move.COLS_TO_FILES[move.start_col] + Move.ROWS_TO_RANKS[move.start_row]
+                                )
+
+        # Double-check en-passant moves for hidden horizontal pins
+        # Example: bR(a5) --- wP(f5) - bP(g5) --- wK(h5).
+        for i in range(len(moves) - 1, -1, -1):
+            if moves[i].move_type == Move.EN_PASSANT:
+                self.make_move(moves[i], annotate=False)
+                self.white_to_move = not self.white_to_move  # Temporarily switch turn back to evaluate check
+                in_check, _, _ = self._check_pins_checks()
+                self.white_to_move = not self.white_to_move  # Revert turn switch
+                self.unmake_move()
+                if in_check:
+                    del moves[i]
+        return moves
 
     def make_move(self, move: 'Move', annotate: bool = True) -> None:
         """
@@ -215,7 +622,7 @@ class GameState:
             self.black_king_location = (move.end_row, move.end_col)
 
         # Update castling rights and append to castle_rights_log
-        self.update_castle_rights(move, record=True)
+        self._update_castle_rights(move, record=True)
 
         # Handle pawn promotion
         if move.move_type == Move.PROMOTION:
@@ -235,17 +642,18 @@ class GameState:
 
         # Execute castling mechanics (moving the rook)
         if move.move_type == Move.CASTLE:
-            if move.end_col - move.start_col == 2: # King side
-                self.board[move.end_row][move.end_col - 1] = self.board[move.end_row][move.end_col + 1]  # Move Rook
-                self.board[move.end_row][move.end_col + 1] = '--'  # Empty space where Rook was
+            if move.end_col - move.start_col == 2:  # King side
+                # Move the Rook and empty the original square of it
+                self.board[move.end_row][move.end_col - 1] = self.board[move.end_row][move.end_col + 1]
+                self.board[move.end_row][move.end_col + 1] = '--'
             else: # Queen side
-                self.board[move.end_row][move.end_col + 1] = self.board[move.end_row][move.end_col - 2]  # Move Rook
-                self.board[move.end_row][move.end_col - 2] = '--'  # Empty space where Rook was
+                self.board[move.end_row][move.end_col + 1] = self.board[move.end_row][move.end_col - 2]
+                self.board[move.end_row][move.end_col - 2] = '--'
 
         # Update pieces' tracked squares list
-        is_white_moved = not self.white_to_move
-        friendly_pieces = self.white_pieces if is_white_moved else self.black_pieces
-        enemy_pieces = self.black_pieces if is_white_moved else self.white_pieces
+        _is_white_moved = not self.white_to_move
+        friendly_pieces = self.white_pieces if _is_white_moved else self.black_pieces
+        enemy_pieces = self.black_pieces if _is_white_moved else self.white_pieces
 
         # Update squares of the moved piece
         friendly_pieces.remove((move.start_row, move.start_col))
@@ -261,19 +669,20 @@ class GameState:
         # Update tracked rook coordinates if castling
         if move.move_type == Move.CASTLE:
             if move.end_col - move.start_col == 2:  # King side
-                friendly_pieces.remove((move.end_row, move.end_col + 1))  # Delete Rook's old square
-                friendly_pieces.add((move.end_row, move.end_col - 1))  # Add new square
+                # Remove Rook's old square and add its new square
+                friendly_pieces.remove((move.end_row, move.end_col + 1))
+                friendly_pieces.add((move.end_row, move.end_col - 1))
             else:  # Queen side
                 friendly_pieces.remove((move.end_row, move.end_col - 2))
                 friendly_pieces.add((move.end_row, move.end_col + 1))
 
         # Check analysis is bypassed if evaluate/simulation is requested by AI
         if annotate:
-            in_check, _, _ = self.check_pins_checks()
+            in_check, _, _ = self._check_pins_checks()
             move.is_check = in_check
 
         # Log and increment the current board layout frequency for repetition check
-        current_state = self.get_board_state_string()
+        current_state = self.get_board_state()
         self.state_log.append(current_state)
         self.state_counts[current_state] = self.state_counts.get(current_state, 0) + 1
 
@@ -284,7 +693,7 @@ class GameState:
         Restores the board, turn, castling rights, and internal tracking lists
         to their exact state before the previous move was executed.
         """
-        if len(self.move_log) != 0: # Ensure there is a move to unmake
+        if len(self.move_log) != 0:  # Ensure there is a move to unmake
             # Revert the current layout string frequency allocation
             current_state = self.state_log.pop()
             self.state_counts[current_state] -= 1
@@ -325,10 +734,11 @@ class GameState:
             # Undo rook movement for castling
             if last_move.move_type == Move.CASTLE:
                 if last_move.end_col - last_move.start_col == 2:  # King side
+                    # Move the Rook and empty the square where it was
                     self.board[last_move.end_row][last_move.end_col + 1] = (
-                        self.board[last_move.end_row][last_move.end_col - 1]  # Move Rook
+                        self.board[last_move.end_row][last_move.end_col - 1]
                     )
-                    self.board[last_move.end_row][last_move.end_col - 1] = '--'  # Empty space where Rook was
+                    self.board[last_move.end_row][last_move.end_col - 1] = '--'
                 else:  # Queen side
                     self.board[last_move.end_row][last_move.end_col - 2] = (
                         self.board[last_move.end_row][last_move.end_col + 1]
@@ -358,6 +768,42 @@ class GameState:
                 else:  # Queen side
                     friendly_pieces.remove((last_move.end_row, last_move.end_col + 1))
                     friendly_pieces.add((last_move.end_row, last_move.end_col - 2))
+
+    def get_board_state(self) -> tuple:
+        """
+        Generate a unique, immutable representation of the current board state.
+
+        This method converts the mutable 2D board list into a nested tuple and
+        combines it with the current game flags. Using tuples instead of string
+        concatenation eliminates the overhead of continuous memory allocation
+        during the AI's deep tree search, allowing the result to be used
+        efficiently as a dictionary key for threefold repetition tracking.
+
+        Returns
+        -------
+        tuple
+            A hashable tuple containing the complete game state, structured as follows:
+            - board_tuple (tuple of tuple of str): The 8x8 grid of chess pieces.
+            - enpassant_possible (tuple of int): The (row, col) square where en passant
+              is possible, or an empty tuple if not applicable.
+            - white_castle_king_side (bool): True if White can castle king-side.
+            - white_castle_queen_side (bool): True if White can castle queen-side.
+            - black_castle_king_side (bool): True if Black can castle king-side.
+            - black_castle_queen_side (bool): True if Black can castle queen-side.
+            - white_to_move (bool): True if it is currently White's turn.
+        """
+        # Convert the mutable 2D list into an immutable tuple of tuples
+        board_tuple = tuple(tuple(row) for row in self.board)
+
+        return (
+            board_tuple,
+            self.enpassant_possible,
+            self.white_castle_king_side,
+            self.white_castle_queen_side,
+            self.black_castle_king_side,
+            self.black_castle_queen_side,
+            self.white_to_move
+        )
 
     def make_ai_move(self, move_tuple: tuple) -> tuple:
         """
@@ -508,110 +954,7 @@ class GameState:
          self.black_castle_king_side,
          self.black_castle_queen_side) = old_castle_rights
 
-    def get_valid_moves(self, for_ai: bool = False) -> list['Move']:
-        """
-        Generate all legal moves in the current position.
-
-        Calculates checks and pins to filter pseudo-legal moves, ensuring
-        no move leaves the king in check.
-
-        Returns
-        -------
-        list of Move
-            A list containing all valid, legal moves.
-        """
-        moves = []
-        self.in_check, self.pins, self.checks = self.check_pins_checks()
-        king_row, king_col = (
-            self.white_king_location if self.white_to_move else self.black_king_location
-        )
-        if self.in_check:
-            if len(self.checks) == 1:  # Single check --> Block check, capture piece, or move King
-                moves = self.get_all_possible_moves()
-                check = self.checks[0]
-                check_row, check_col = check[0], check[1]
-                piece_checking = self.board[check_row][check_col]
-                valid_squares = set()
-
-                # If checking piece is a knight, block is impossible; must capture or move king
-                if piece_checking[1] == 'N':
-                    valid_squares = {(check_row, check_col)}
-                else:
-                    for i in range(1, 8):
-                        # check[2] and check[3] --> Check's direction
-                        valid_square = (
-                            king_row + check[2] * i,
-                            king_col + check[3] * i,
-                        )
-                        valid_squares.add(valid_square)
-                        if valid_square == (check_row, check_col):  # Reach the checking piece
-                            break
-
-                # Remove moves that don't satisfy block, capture, or evade logic
-                for i in range(len(moves) - 1, -1, -1):
-                    if moves[i].piece_moved[1] != 'K':  # Move doesn't move the King
-                        if (moves[i].end_row, moves[i].end_col) not in valid_squares:  # Move doesn't block check/capture
-                            del moves[i]
-            else:  # Double check --> King is forced to move
-                self.get_king_moves(king_row, king_col, moves)
-        else:  # Not in check
-            moves = self.get_all_possible_moves()
-
-        # Determine Checkmate or Stalemate statuses
-        if len(moves) == 0: # Neither Checkmate nor Stalemate
-            if self.in_check:
-                self.is_checkmate = True
-            else:
-                self.is_stalemate = True
-        else:
-            self.is_checkmate = False
-            self.is_stalemate = False
-
-            # Enforce 50-move standard clock limits and threefold matching checks
-            current_state = self.get_board_state_string()
-            if self.halfmove_clock >= 100 or self.state_counts.get(current_state, 0) >= 3:
-                self.is_stalemate = True
-                moves = []  # Immediately cease operation and return empty list on draw
-
-            # Resolve Ambiguous Notation (Bypassed entirely if generated for AI node processing)
-        if not for_ai and len(moves) > 0:
-            move_map = {}
-            for move in moves:
-                if move.piece_moved[1] != 'P':
-                    key = (move.piece_moved, move.end_row, move.end_col)
-                    if key not in move_map:
-                        move_map[key] = []
-                    move_map[key].append(move)
-
-            for key, matching_moves in move_map.items():
-                if len(matching_moves) > 1:
-                    for move in matching_moves:
-                        cols = [m.start_col for m in matching_moves]
-                        if cols.count(move.start_col) == 1:
-                            move.disambiguation = Move.COLS_TO_FILES[move.start_col]
-                        else:
-                            rows = [m.start_row for m in matching_moves]
-                            if rows.count(move.start_row) == 1:
-                                move.disambiguation = Move.ROWS_TO_RANKS[move.start_row]
-                            else:
-                                move.disambiguation = (
-                                    Move.COLS_TO_FILES[move.start_col] + Move.ROWS_TO_RANKS[move.start_row]
-                                )
-
-        # Double-check en-passant moves for hidden horizontal pins
-        # Example: bR(a5) --- wP(f5) - bP(g5) --- wK(h5).
-        for i in range(len(moves) - 1, -1, -1):
-            if moves[i].move_type == Move.EN_PASSANT:
-                self.make_move(moves[i], annotate=False)
-                self.white_to_move = not self.white_to_move  # Temporarily switch turn back to evaluate check
-                in_check, _, _ = self.check_pins_checks()
-                self.white_to_move = not self.white_to_move  # Revert turn switch
-                self.unmake_move()
-                if in_check:
-                    del moves[i]
-        return moves
-
-    def get_all_possible_moves(self) -> list['Move']:
+    def _get_all_possible_moves(self) -> list['Move']:
         """
         Generate all pseudo-legal moves without considering checks or pins.
 
@@ -626,10 +969,188 @@ class GameState:
             piece = self.board[row][col][1]  # Extract piece type: P, R, N, B, Q, K
             self.move_functions[piece](row, col, possible_moves)
             if piece == 'K':
-                self.get_castle_moves(row, col, possible_moves)
+                self._get_castle_moves(row, col, possible_moves)
         return possible_moves
 
-    def get_pawn_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
+    def _check_pins_checks(self) -> tuple[
+        bool,
+        dict[tuple[int, int], tuple[int, int]],
+        list[tuple[int, int, int, int]]
+    ]:
+        """
+        Scan outward from the king to identify active checks and absolute pins.
+
+        Returns
+        -------
+        tuple
+            A tuple containing three items:
+            - in_check (bool): True if the king is currently in check.
+            - pins (dict of tuple to tuple): Active pins mapping the pinned piece's
+              coordinate (row, col) to its pinned vector direction (d_row, d_col).
+            - checks (list of tuple): List of active checks storing the attacking
+              piece's location and vector as (row, col, d_row, d_col).
+        """
+        pins = {}
+        checks = []
+        in_check = False
+        row, col = self.white_king_location if self.white_to_move else self.black_king_location
+        directions = (
+            (-1, 0),
+            (0, -1),
+            (1, 0),
+            (0, 1),
+            (-1, -1),
+            (-1, 1),
+            (1, -1),
+            (1, 1),
+        )
+        # Check for Rooks, Bishops, Pawns, and Queens checks
+        for i in range(len(directions)):
+            d = directions[i]
+            possible_pins = () # Reset for each direction
+            for j in range(1, 8):
+                end_row = row + d[0] * j
+                end_col = col + d[1] * j
+                if self._is_on_board(end_row, end_col):
+                    end_piece = self.board[end_row][end_col]
+
+                    # Ignore the moving phantom King to prevent false blocks
+                    if end_piece[0] == self.friendly_color and end_piece[1] != 'K':
+                        if len(possible_pins) == 0:  # 1st friendly piece could be pinned
+                            possible_pins = (end_row, end_col, d[0], d[1])
+                        else:  # 2nd friendly piece, so no pins or checks exist further out
+                            break
+                    elif end_piece[0] == self.enemy_color:
+                        enemy_piece_type = end_piece[1]
+
+                        # Five check conditions mapped to direction index:
+                        # 0-3: Orthogonal (Rook)
+                        # 4-7: Diagonal (Bishop)
+                        # Pawns attacking diagonally 1 square away
+                        # Queens attack on any vector
+                        # Kings block their respective squares (distance == 1)
+                        if (
+                            (0 <= i <= 3 and enemy_piece_type == 'R')
+                            or (4 <= i <= 7 and enemy_piece_type == 'B')
+                            or (
+                                j == 1
+                                and (
+                                        (self.enemy_color == 'b' and 4 <= i <= 5)
+                                        or (self.enemy_color == 'w' and 6 <= i <= 7)
+                                )
+                                and enemy_piece_type == 'P'
+                            )
+                            or (enemy_piece_type == 'Q')
+                            or (j == 1 and enemy_piece_type == 'K')
+                        ):
+                            if len(possible_pins) == 0:
+                                in_check = True
+                                checks.append((end_row, end_col, d[0], d[1]))
+                                break
+                            else:  # A friendly piece is shielding the king -> Pin
+                                # Store in Dict with Key is (row, col), Value is (d_row, d_col)
+                                pins[(possible_pins[0], possible_pins[1])] = (possible_pins[2], possible_pins[3])
+                                break
+                        else:  # Enemy piece does not threaten the king along this vector
+                            break
+                else: # Off board
+                    break
+
+        # Check for Knight checks
+        knight_moves = (
+            (-2, -1), (-2, 1),
+            (-1, -2), (-1, 2),
+            (1, -2), (1, 2),
+            (2, -1), (2, 1),
+        )
+        for move in knight_moves:
+            end_row = row + move[0]
+            end_col = col + move[1]
+            if self._is_on_board(end_row, end_col):
+                end_piece = self.board[end_row][end_col]
+                if end_piece[0] == self.enemy_color and end_piece[1] == 'N':
+                    in_check = True
+                    checks.append((end_row, end_col, move[0], move[1]))
+                    break
+
+        return in_check, pins, checks
+
+    def _is_square_attacked(self, row: int, col: int) -> bool:
+        """
+        Determine if a specific square is under attack by any enemy piece.
+        Optimized for king move generation to avoid full pin/check calculations.
+
+        Parameters
+        ----------
+        row : int
+            The row index of the square to check.
+        col : int
+            The column index of the square to check.
+
+        Returns
+        -------
+        bool
+            True if the square is attacked by an enemy piece, False otherwise.
+        """
+        enemy_color = 'b' if self.white_to_move else 'w'
+        friendly_color = 'w' if self.white_to_move else 'b'
+
+        directions = (
+            (-1, 0), (0, -1), (1, 0), (0, 1),  # Rook and Queen orthogonal vectors
+            (-1, -1), (-1, 1), (1, -1), (1, 1)  # Bishop and Queen diagonal vectors
+        )
+
+        # Check outward for Rooks, Bishops, Queens, Pawns, and King
+        for i in range(len(directions)):
+            d = directions[i]
+            for j in range(1, 8):
+                end_row = row + d[0] * j
+                end_col = col + d[1] * j
+                if self._is_on_board(end_row, end_col):
+                    end_piece = self.board[end_row][end_col]
+
+                    # Ignore our own King to allow ray casting through its original position
+                    if end_piece[0] == friendly_color and end_piece[1] != 'K':
+                        break
+                    elif end_piece[0] == enemy_color:
+                        enemy_piece_type = end_piece[1]
+
+                        # Check orthogonal attacks (Rook/Queen)
+                        if 0 <= i <= 3 and enemy_piece_type in ('R', 'Q'):
+                            return True
+                        # Check diagonal attacks (Bishop/Queen)
+                        elif 4 <= i <= 7 and enemy_piece_type in ('B', 'Q'):
+                            return True
+                        # Check Pawn attacks (Distance of 1, specific diagonals)
+                        elif j == 1 and enemy_piece_type == 'P':
+                            if enemy_color == 'b' and 4 <= i <= 5:
+                                return True
+                            elif enemy_color == 'w' and 6 <= i <= 7:
+                                return True
+                        # Check enemy King attacks (Distance of 1 in any direction)
+                        elif j == 1 and enemy_piece_type == 'K':
+                            return True
+                        else:
+                            break  # Other enemy piece blocking the ray
+                else:
+                    break
+
+        # Check Knight attacks
+        knight_moves = (
+            (-2, -1), (-2, 1), (-1, -2), (-1, 2),
+            (1, -2), (1, 2), (2, -1), (2, 1)
+        )
+        for m in knight_moves:
+            end_row = row + m[0]
+            end_col = col + m[1]
+            if self._is_on_board(end_row, end_col):
+                end_piece = self.board[end_row][end_col]
+                if end_piece[0] == enemy_color and end_piece[1] == 'N':
+                    return True
+
+        return False
+
+    def _get_pawn_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
         """
         Get all pseudo-legal moves for a pawn at the specified location.
 
@@ -700,7 +1221,7 @@ class GameState:
                             Move.en_passant((row, col), (row + move_amount, new_col), self.board)
                         )
 
-    def get_rook_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
+    def _get_rook_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
         """
         Get all pseudo-legal moves for a rook at the specified location.
 
@@ -714,9 +1235,9 @@ class GameState:
             The list to which generated moves will be appended.
         """
         directions = ((-1, 0), (1, 0), (0, -1), (0, 1))
-        self.get_sliding_moves(row, col, possible_moves, directions)
+        self._get_sliding_moves(row, col, possible_moves, directions)
 
-    def get_bishop_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
+    def _get_bishop_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
         """
         Get all pseudo-legal moves for a bishop at the specified location.
 
@@ -730,9 +1251,9 @@ class GameState:
             The list to which generated moves will be appended.
         """
         directions = ((-1, -1), (1, 1), (1, -1), (-1, 1))
-        self.get_sliding_moves(row, col, possible_moves, directions)
+        self._get_sliding_moves(row, col, possible_moves, directions)
 
-    def get_queen_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
+    def _get_queen_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
         """
         Get all pseudo-legal moves for a queen at the specified location.
 
@@ -745,10 +1266,10 @@ class GameState:
         possible_moves : list of Move
             The list to which generated moves will be appended.
         """
-        self.get_rook_moves(row, col, possible_moves)
-        self.get_bishop_moves(row, col, possible_moves)
+        self._get_rook_moves(row, col, possible_moves)
+        self._get_bishop_moves(row, col, possible_moves)
 
-    def get_sliding_moves(
+    def _get_sliding_moves(
             self,
             row: int,
             col: int,
@@ -782,7 +1303,7 @@ class GameState:
             while True:
                 end_row += d[0]
                 end_col += d[1]
-                if self.is_on_board(end_row, end_col):
+                if self._is_on_board(end_row, end_col):
                     if (
                         not piece_pinned
                         or pin_direction == (d[0], d[1])
@@ -803,7 +1324,7 @@ class GameState:
                 else:  # Off board
                     break
 
-    def get_knight_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
+    def _get_knight_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
         """
         Get all pseudo-legal moves for a knight at the specified location.
 
@@ -831,7 +1352,7 @@ class GameState:
         for move in moves:
             end_row = row + move[0]
             end_col = col + move[1]
-            if self.is_on_board(end_row, end_col):
+            if self._is_on_board(end_row, end_col):
                 if not piece_pinned:
                     end_piece = self.board[end_row][end_col]
                     if end_piece == '--' or end_piece[0] == self.enemy_color:
@@ -839,7 +1360,7 @@ class GameState:
                             Move.normal((row, col), (end_row, end_col), self.board)
                         )
 
-    def get_king_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
+    def _get_king_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
         """
         Get all pseudo-legal normal moves for a king at the specified location.
         Uses optimized is_square_attacked to validate safe squares.
@@ -859,16 +1380,16 @@ class GameState:
         for i in range(8):
             end_row = row + row_moves[i]
             end_col = col + col_moves[i]
-            if self.is_on_board(end_row, end_col):
+            if self._is_on_board(end_row, end_col):
                 end_piece = self.board[end_row][end_col]
                 if end_piece == '--' or end_piece[0] == self.enemy_color:
                     # Validate if the destination square is safe directly
-                    if not self.is_square_attacked(end_row, end_col):
+                    if not self._is_square_attacked(end_row, end_col):
                         possible_moves.append(
                             Move.normal((row, col), (end_row, end_col), self.board)
                         )
 
-    def get_castle_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
+    def _get_castle_moves(self, row: int, col: int, possible_moves: list['Move']) -> None:
         """
         Get all legal castling moves for the king.
 
@@ -938,189 +1459,11 @@ class GameState:
             True if all squares are safe, False otherwise.
         """
         for square in squares:
-            if self.is_square_attacked(square[0], square[1]):
+            if self._is_square_attacked(square[0], square[1]):
                 return False
         return True
 
-    def check_pins_checks(self) -> tuple[
-        bool,
-        dict[tuple[int, int], tuple[int, int]],
-        list[tuple[int, int, int, int]]
-    ]:
-        """
-        Scan outward from the king to identify active checks and absolute pins.
-
-        Returns
-        -------
-        tuple
-            A tuple containing three items:
-            - in_check (bool): True if the king is currently in check.
-            - pins (dict of tuple to tuple): Active pins mapping the pinned piece's
-              coordinate (row, col) to its pinned vector direction (d_row, d_col).
-            - checks (list of tuple): List of active checks storing the attacking
-              piece's location and vector as (row, col, d_row, d_col).
-        """
-        pins = {}
-        checks = []
-        in_check = False
-        row, col = self.white_king_location if self.white_to_move else self.black_king_location
-        directions = (
-            (-1, 0),
-            (0, -1),
-            (1, 0),
-            (0, 1),
-            (-1, -1),
-            (-1, 1),
-            (1, -1),
-            (1, 1),
-        )
-        # Check for Rooks, Bishops, Pawns, and Queens checks
-        for i in range(len(directions)):
-            d = directions[i]
-            possible_pins = () # Reset for each direction
-            for j in range(1, 8):
-                end_row = row + d[0] * j
-                end_col = col + d[1] * j
-                if self.is_on_board(end_row, end_col):
-                    end_piece = self.board[end_row][end_col]
-
-                    # Ignore the moving phantom King to prevent false blocks
-                    if end_piece[0] == self.friendly_color and end_piece[1] != 'K':
-                        if len(possible_pins) == 0:  # 1st friendly piece could be pinned
-                            possible_pins = (end_row, end_col, d[0], d[1])
-                        else:  # 2nd friendly piece, so no pins or checks exist further out
-                            break
-                    elif end_piece[0] == self.enemy_color:
-                        enemy_piece_type = end_piece[1]
-
-                        # Five check conditions mapped to direction index:
-                        # 0-3: Orthogonal (Rook)
-                        # 4-7: Diagonal (Bishop)
-                        # Pawns attacking diagonally 1 square away
-                        # Queens attack on any vector
-                        # Kings block their respective squares (distance == 1)
-                        if (
-                            (0 <= i <= 3 and enemy_piece_type == 'R')
-                            or (4 <= i <= 7 and enemy_piece_type == 'B')
-                            or (
-                                j == 1
-                                and (
-                                        (self.enemy_color == 'b' and 4 <= i <= 5)
-                                        or (self.enemy_color == 'w' and 6 <= i <= 7)
-                                )
-                                and enemy_piece_type == 'P'
-                            )
-                            or (enemy_piece_type == 'Q')
-                            or (j == 1 and enemy_piece_type == 'K')
-                        ):
-                            if len(possible_pins) == 0:
-                                in_check = True
-                                checks.append((end_row, end_col, d[0], d[1]))
-                                break
-                            else:  # A friendly piece is shielding the king -> Pin
-                                # Store in Dict with Key is (row, col), Value is (d_row, d_col)
-                                pins[(possible_pins[0], possible_pins[1])] = (possible_pins[2], possible_pins[3])
-                                break
-                        else:  # Enemy piece does not threaten the king along this vector
-                            break
-                else: # Off board
-                    break
-
-        # Check for Knight checks
-        knight_moves = (
-            (-2, -1), (-2, 1),
-            (-1, -2), (-1, 2),
-            (1, -2), (1, 2),
-            (2, -1), (2, 1),
-        )
-        for move in knight_moves:
-            end_row = row + move[0]
-            end_col = col + move[1]
-            if self.is_on_board(end_row, end_col):
-                end_piece = self.board[end_row][end_col]
-                if end_piece[0] == self.enemy_color and end_piece[1] == 'N':
-                    in_check = True
-                    checks.append((end_row, end_col, move[0], move[1]))
-                    break
-
-        return in_check, pins, checks
-
-    def is_square_attacked(self, row: int, col: int) -> bool:
-        """
-        Determine if a specific square is under attack by any enemy piece.
-        Optimized for king move generation to avoid full pin/check calculations.
-
-        Parameters
-        ----------
-        row : int
-            The row index of the square to check.
-        col : int
-            The column index of the square to check.
-
-        Returns
-        -------
-        bool
-            True if the square is attacked by an enemy piece, False otherwise.
-        """
-        enemy_color = 'b' if self.white_to_move else 'w'
-        friendly_color = 'w' if self.white_to_move else 'b'
-
-        directions = (
-            (-1, 0), (0, -1), (1, 0), (0, 1),  # Rook and Queen orthogonal vectors
-            (-1, -1), (-1, 1), (1, -1), (1, 1)  # Bishop and Queen diagonal vectors
-        )
-
-        # Check outward for Rooks, Bishops, Queens, Pawns, and King
-        for i in range(len(directions)):
-            d = directions[i]
-            for j in range(1, 8):
-                end_row = row + d[0] * j
-                end_col = col + d[1] * j
-                if self.is_on_board(end_row, end_col):
-                    end_piece = self.board[end_row][end_col]
-
-                    # Ignore our own King to allow ray casting through its original position
-                    if end_piece[0] == friendly_color and end_piece[1] != 'K':
-                        break
-                    elif end_piece[0] == enemy_color:
-                        enemy_piece_type = end_piece[1]
-
-                        # Check orthogonal attacks (Rook/Queen)
-                        if 0 <= i <= 3 and enemy_piece_type in ('R', 'Q'):
-                            return True
-                        # Check diagonal attacks (Bishop/Queen)
-                        elif 4 <= i <= 7 and enemy_piece_type in ('B', 'Q'):
-                            return True
-                        # Check Pawn attacks (Distance of 1, specific diagonals)
-                        elif j == 1 and enemy_piece_type == 'P':
-                            if enemy_color == 'b' and 4 <= i <= 5:
-                                return True
-                            elif enemy_color == 'w' and 6 <= i <= 7:
-                                return True
-                        # Check enemy King attacks (Distance of 1 in any direction)
-                        elif j == 1 and enemy_piece_type == 'K':
-                            return True
-                        else:
-                            break  # Other enemy piece blocking the ray
-                else:
-                    break
-
-        # Check Knight attacks
-        knight_moves = (
-            (-2, -1), (-2, 1), (-1, -2), (-1, 2),
-            (1, -2), (1, 2), (2, -1), (2, 1)
-        )
-        for m in knight_moves:
-            end_row = row + m[0]
-            end_col = col + m[1]
-            if self.is_on_board(end_row, end_col):
-                end_piece = self.board[end_row][end_col]
-                if end_piece[0] == enemy_color and end_piece[1] == 'N':
-                    return True
-
-        return False
-
-    def update_castle_rights(self, move: 'Move', record: bool = True) -> None:
+    def _update_castle_rights(self, move: 'Move', record: bool = True) -> None:
         """
         Update castling privileges after a piece moves or is captured.
 
@@ -1175,254 +1518,10 @@ class GameState:
                 )
             )
 
-
-'''
-Move:
-- Storing move information: sq_start, sq_end, move_type, promotion
-- Each move_type has separated method, access by:
-    move.NORMAL(...) | move.EN_PASSANT(...) | move.CASTLE(...) | move.PROMOTION(...)
-- Handling chess notation
-'''
-class Move:
-    """
-    Representation of a single chess move.
-
-    Stores source and destination squares, move type constraints, and provides
-    functions to convert movements into standard chess notation.
-    """
-    NORMAL = 'normal'
-    EN_PASSANT = 'en_passant'
-    CASTLE = 'castle'
-    PROMOTION = 'promotion'
-
-    # Dictionary to translate rows and cols to ranks and files of chess notation
-    ROWS_TO_RANKS = {
-        0: '8',
-        1: '7',
-        2: '6',
-        3: '5',
-        4: '4',
-        5: '3',
-        6: '2',
-        7: '1',
-    }
-    COLS_TO_FILES = {
-        0: 'a',
-        1: 'b',
-        2: 'c',
-        3: 'd',
-        4: 'e',
-        5: 'f',
-        6: 'g',
-        7: 'h',
-    }
-
-    def __init__(
-        self,
-        start_sq: tuple[int, int],
-        end_sq: tuple[int, int],
-        board: list[list[str]],
-        move_type: str = 'normal',
-        promotion_piece: str = 'Q'
-    ) -> None:
+    @staticmethod
+    def _is_on_board(row: int, col: int) -> bool:
         """
-        Initialize a Move object with its state and properties.
-
-        Parameters
-        ----------
-        start_sq : tuple of int
-            The starting coordinate (row, col) of the move.
-        end_sq : tuple of int
-            The destination coordinate (row, col) of the move.
-        board : list of list of str
-            The board array to extract piece information.
-        move_type : str, optional
-            The special classification of the move. Default is 'normal'.
-        promotion_piece : str, optional
-            The piece selected if a pawn promotes. Default is 'Q'.
-        """
-        self.start_row = start_sq[0]
-        self.start_col = start_sq[1]
-        self.end_row = end_sq[0]
-        self.end_col = end_sq[1]
-
-        self.piece_moved = board[self.start_row][self.start_col]
-        self.piece_captured = board[self.end_row][self.end_col]
-
-        self.move_type = move_type
-        self.promotion_piece = promotion_piece
-
-        if self.move_type == self.EN_PASSANT:
-            self.piece_captured = 'bP' if self.piece_moved == 'wP' else 'wP'
-
-        # Property storing ambiguity notation context if evaluated during UI rendering
-        self.disambiguation = ''
-
-    @classmethod
-    def normal(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
-        """
-        Construct a standard normal move.
-
-        Parameters
-        ----------
-        start_sq : tuple of int
-            The starting coordinate (row, col).
-        end_sq : tuple of int
-            The destination coordinate (row, col).
-        board : list of list of str
-            The current board array.
-
-        Returns
-        -------
-        Move
-            A new Move instance classified as NORMAL.
-        """
-        return cls(start_sq, end_sq, board, move_type=cls.NORMAL)
-
-    @classmethod
-    def en_passant(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
-        """
-        Construct an en-passant capture move.
-
-        Parameters
-        ----------
-        start_sq : tuple of int
-            The starting coordinate (row, col).
-        end_sq : tuple of int
-            The destination coordinate (row, col).
-        board : list of list of str
-            The current board array.
-
-        Returns
-        -------
-        Move
-            A new Move instance classified as EN_PASSANT.
-        """
-        return cls(start_sq, end_sq, board, move_type=cls.EN_PASSANT)
-
-    @classmethod
-    def castle(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
-        """
-        Construct an castle move.
-
-        Parameters
-        ----------
-        start_sq : tuple of int
-            The starting coordinate (row, col).
-        end_sq : tuple of int
-            The destination coordinate (row, col).
-        board : list of list of str
-            The current board array.
-
-        Returns
-        -------
-        Move
-            A new Move instance classified as CASTLE.
-        """
-        """Construct a castling move."""
-        return cls(start_sq, end_sq, board, move_type=cls.CASTLE)
-
-    @classmethod
-    def promotion(
-            cls,
-            start_sq: tuple[int, int],
-            end_sq: tuple[int, int],
-            board: list[list[str]],
-            promotion_piece: str = 'Q'
-    ) -> 'Move':
-        """
-        Construct a pawn promotion move.
-
-        Parameters
-        ----------
-        start_sq : tuple of int
-            The starting coordinate (row, col) of the promoting pawn.
-        end_sq : tuple of int
-            The destination coordinate (row, col) on the promotion rank.
-        board : list of list of str
-            The current 2D board array configuration.
-        promotion_piece : str, optional
-            The target chess piece character designated for the promotion
-            (typically 'Q', 'R', 'B', or 'N'). Default is 'Q'.
-
-        Returns
-        -------
-        Move
-            A new Move instance explicitly classified as PROMOTION with the
-            designated target piece type.
-        """
-        return cls(
-            start_sq,
-            end_sq,
-            board,
-            move_type=cls.PROMOTION,
-            promotion_piece=promotion_piece,
-        )
-
-    def __eq__(self, other: object) -> bool:
-        """
-        Determine equality between this move and another object.
-
-        Parameters
-        ----------
-        other : object
-            The object to compare against.
-
-        Returns
-        -------
-        bool
-            True if the compared object is a matching Move, False otherwise.
-        """
-        if isinstance(other, Move):
-            return (
-                    self.start_row == other.start_row
-                    and self.start_col == other.start_col
-                    and self.end_row == other.end_row
-                    and self.end_col == other.end_col
-                    and self.move_type == other.move_type
-                    and self.promotion_piece == other.promotion_piece
-            )
-        return False
-
-    @property
-    def is_pawn_promotion(self) -> bool:
-        """
-        Check if the move involves a pawn reaching the furthest rank and promoting.
-
-        Returns
-        -------
-        bool
-            True if the internal move type matches PROMOTION, False otherwise.
-        """
-        return self.move_type == self.PROMOTION
-
-    @property
-    def is_enpassant_move(self) -> bool:
-        """
-        Check if the move is a special en-passant diagonal pawn capture.
-
-        Returns
-        -------
-        bool
-            True if the internal move type matches EN_PASSANT, False otherwise.
-        """
-        return self.move_type == self.EN_PASSANT
-
-    @property
-    def is_castle_move(self) -> bool:
-        """
-        Check if the move is a castling maneuver involving both the king and a rook.
-
-        Returns
-        -------
-        bool
-            True if the internal move type matches CASTLE, False otherwise.
-        """
-        return self.move_type == self.CASTLE
-
-    def get_file_rank(self, row: int, col: int) -> str:
-        """
-        Convert matrix coordinates to standard board notations.
+        Check if a given set of coordinates is within the 8x8 board.
 
         Parameters
         ----------
@@ -1433,81 +1532,7 @@ class Move:
 
         Returns
         -------
-        str
-            The rank and file representation (e.g. 'e4').
+        bool
+            True if coordinates are valid, False otherwise.
         """
-        return self.COLS_TO_FILES[col] + self.ROWS_TO_RANKS[row]
-
-    def get_chess_notation(self) -> str:
-        """
-        Construct the algebraic chess notation string for the move.
-        Uses standard English letters (N, B, R, Q, K) to avoid missing
-        Unicode character issues (rendering as boxes) in pygame default fonts.
-
-        Returns
-        -------
-        str
-            The algebraic notation representing the move executed.
-        """
-        if self.is_castle_move:
-            notation = 'O-O' if self.end_col > self.start_col else 'O-O-O'
-        else:
-            notation = ''
-
-            if self.piece_moved[1] != 'P':
-                notation = self.piece_moved[1]
-                # Append file or rank modifier if ambiguous targeting is found
-                if self.disambiguation:
-                    notation += self.disambiguation
-
-            # Handling captures
-            if self.piece_captured != '--':
-                if self.piece_moved[1] == 'P':
-                    notation += self.COLS_TO_FILES[self.start_col]
-                notation += 'x'
-
-            # Generate standard destination suffix
-            notation += self.get_file_rank(self.end_row, self.end_col)
-
-            if self.is_pawn_promotion:
-                notation += '=' + self.promotion_piece
-
-        # Append check or checkmate symbols
-        if getattr(self, 'is_checkmate', False):
-            notation += '#'
-        elif getattr(self, 'is_check', False):
-            notation += '+'
-
-        return notation
-
-
-class CastleRights:
-    """
-    Data wrapper for storing castling privileges at a specific game state.
-    """
-
-    def __init__(
-        self,
-        white_king_side: bool,
-        white_queen_side: bool,
-        black_king_side: bool,
-        black_queen_side: bool
-    ) -> None:
-        """
-        Initialize the castle rights log entry.
-
-        Parameters
-        ----------
-        white_king_side : bool
-            True if white can castle king-side.
-        white_queen_side : bool
-            True if white can castle queen-side.
-        black_king_side : bool
-            True if black can castle king-side.
-        black_queen_side : bool
-            True if black can castle queen-side.
-        """
-        self.white_king_side = white_king_side
-        self.white_queen_side = white_queen_side
-        self.black_king_side = black_king_side
-        self.black_queen_side = black_queen_side
+        return 0 <= row < 8 and 0 <= col < 8
