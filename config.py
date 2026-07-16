@@ -25,8 +25,8 @@ MAX_FPS = 20
 ANIMATION_FPS = 60
 
 # Global caches
-IMAGES = {}  # Storing chess pieces' images
-COORD_SURFACES = {'white': {}, 'grey': {}}  # Storing pre-rendered coordinate surfaces
+IMAGES: dict[str, pg.Surface] = {}  # Storing chess pieces' images
+COORD_SURFACES: dict[str, dict[tuple[int, int], pg.Surface]] = {'white': {}, 'grey': {}}  # Storing pre-rendered coordinate surfaces
 
 # Standard board colors
-board_colors = [pg.Color('white'), pg.Color('grey')]
+board_colors: list[pg.Color] = [pg.Color('white'), pg.Color('grey')]

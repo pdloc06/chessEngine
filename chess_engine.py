@@ -97,7 +97,10 @@ class Move:
             self.piece_captured = 'bP' if self.piece_moved == 'wP' else 'wP'
 
         # Stores ambiguity notation context if evaluated during UI rendering
-        self.disambiguation = ''
+        self.disambiguation: str = ''
+
+        self.is_check: bool = False
+        self.is_checkmate: bool = False
 
     @classmethod
     def normal(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
@@ -192,9 +195,9 @@ class Move:
                 notation += '=' + self.promotion_piece
 
         # Append check or checkmate symbols (evaluated post-move)
-        if getattr(self, 'is_checkmate', False):
+        if self.is_checkmate:
             notation += '#'
-        elif getattr(self, 'is_check', False):
+        elif self.is_check:
             notation += '+'
 
         return notation
@@ -241,8 +244,8 @@ class GameState:
         self.BLACK_KING_HOME_SQUARE = (0, 4)
 
         # Track active piece coordinates to optimize move generation
-        self.white_pieces = set()
-        self.black_pieces = set()
+        self.white_pieces: set[tuple[int, int]] = set()
+        self.black_pieces: set[tuple[int, int]] = set()
         for row in range(8):
             for col in range(8):
                 piece = self.board[row][col]
@@ -253,24 +256,24 @@ class GameState:
                         self.black_pieces.add((row, col))
 
         # Game state flags
-        self.in_check = False
-        self.is_checkmate = False
-        self.is_stalemate = False
-        self.checks = []
-        self.pins = {}
+        self.in_check: bool = False
+        self.is_checkmate: bool = False
+        self.is_stalemate: bool = False
+        self.checks: list[tuple[int, int, int, int]] = []
+        self.pins: dict[tuple[int, int], tuple[int, int]] = {}
 
-        self.move_log = []
+        self.move_log: list[Move] = []
 
         # En-passant coordinates
-        self.enpassant_possible = ()
-        self.enpassant_possible_log = [self.enpassant_possible]
+        self.enpassant_possible: tuple[int, int] | None = None
+        self.enpassant_possible_log: list[tuple[int, int] | None] = [self.enpassant_possible]
 
         # Castling rights mapping
-        self.white_castle_king_side = True
-        self.white_castle_queen_side = True
-        self.black_castle_king_side = True
-        self.black_castle_queen_side = True
-        self.castle_rights_log = [
+        self.white_castle_king_side: bool = True
+        self.white_castle_queen_side: bool = True
+        self.black_castle_king_side: bool = True
+        self.black_castle_queen_side: bool = True
+        self.castle_rights_log: list[CastleRights] = [
             CastleRights(
                 self.white_castle_king_side,
                 self.white_castle_queen_side,
@@ -280,13 +283,13 @@ class GameState:
         ]
 
         # Rule tracking logs
-        self.halfmove_clock = 0
-        self.halfmove_clock_log = []
-        self.state_counts = {}
-        self.state_log = []
+        self.halfmove_clock: int = 0
+        self.halfmove_clock_log: list[int] = []
+        self.state_counts: dict[tuple, int] = {}
+        self.state_log: list[tuple] = []
 
         # Hash and store the absolute initial state configuration
-        initial_state = self.get_board_state()
+        initial_state: tuple = self.get_board_state()
         self.state_counts[initial_state] = 1
         self.state_log.append(initial_state)
 
@@ -372,7 +375,7 @@ class GameState:
 
         # Calculate Ambiguous Notation mapping for UI
         if not for_ai and len(moves) > 0:
-            move_map = {}
+            move_map: dict[tuple, list[Move]] = {}
             for move in moves:
                 if move.piece_moved[1] != 'P':
                     key = (move.piece_moved, move.end_row, move.end_col)
@@ -463,7 +466,7 @@ class GameState:
         if move.piece_moved[1] == 'P' and abs(move.start_row - move.end_row) == 2:
             self.enpassant_possible = ((move.start_row + move.end_row) // 2, move.end_col)
         else:
-            self.enpassant_possible = ()
+            self.enpassant_possible = None
 
         if move.move_type == Move.EN_PASSANT:
             self.board[move.start_row][move.end_col] = '--'
@@ -660,7 +663,7 @@ class GameState:
         if piece_moved[1] == 'P' and abs(start_row - end_row) == 2:
             self.enpassant_possible = ((start_row + end_row) // 2, end_col)
         else:
-            self.enpassant_possible = ()
+            self.enpassant_possible = None
 
         if piece_moved[1] == 'R':
             if start_row == 7:
@@ -725,8 +728,8 @@ class GameState:
 
     def _get_all_possible_moves(self, for_ai: bool = False) -> list:
         """Scan active pieces and fetch logic bounds for pseudo-legal moves."""
-        possible_moves = []
-        active_pieces = self.white_pieces if self.white_to_move else self.black_pieces
+        possible_moves: list[Move] = []
+        active_pieces: set[tuple[int, int]] = self.white_pieces if self.white_to_move else self.black_pieces
 
         for row, col in active_pieces:
             piece = self.board[row][col][1]
@@ -759,7 +762,7 @@ class GameState:
 
         for i in range(len(directions)):
             d = directions[i]
-            possible_pins = ()
+            possible_pins: tuple = ()
             for j in range(1, 8):
                 end_row = row + d[0] * j
                 end_col = col + d[1] * j
@@ -880,7 +883,7 @@ class GameState:
         _is_back_row = row + move_amount == back_row
 
         piece_pinned = False
-        pin_direction = ()
+        pin_direction: tuple[int, int] | tuple[()] = ()
         if (row, col) in self.pins:
             piece_pinned = True
             pin_direction = self.pins[(row, col)]
@@ -894,13 +897,18 @@ class GameState:
                 else:
                     for piece in ['Q', 'R', 'B', 'N']:
                         possible_moves.append(
-                            Move.promotion((row, col), (end_row, end_col), self.board, promotion_piece=piece)
+                            Move.promotion(
+                                (row, col), (end_row, end_col),
+                                self.board, promotion_piece=piece
+                            )
                         )
             else:
                 if for_ai:
                     possible_moves.append((row, col, end_row, end_col, 0))
                 else:
-                    possible_moves.append(Move.normal((row, col), (end_row, end_col), self.board))
+                    possible_moves.append(
+                        Move.normal((row, col), (end_row, end_col), self.board)
+                    )
 
         if self.board[row + move_amount][col] == '--':
             if not piece_pinned or pin_direction == (-1, 0) or pin_direction == (1, 0):
@@ -909,7 +917,9 @@ class GameState:
                     if for_ai:
                         possible_moves.append((row, col, row + 2 * move_amount, col, 0))
                     else:
-                        possible_moves.append(Move.normal((row, col), (row + 2 * move_amount, col), self.board))
+                        possible_moves.append(
+                            Move.normal((row, col), (row + 2 * move_amount, col), self.board)
+                        )
 
         for col_offset in [-1, 1]:
             new_col = col + col_offset
@@ -923,7 +933,9 @@ class GameState:
                         if for_ai:
                             possible_moves.append((row, col, row + move_amount, new_col, 2))
                         else:
-                            possible_moves.append(Move.en_passant((row, col), (row + move_amount, new_col), self.board))
+                            possible_moves.append(
+                                Move.en_passant((row, col), (row + move_amount, new_col), self.board)
+                            )
 
     def _get_rook_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
         """Get all pseudo-legal moves for a rook at the specified location."""
@@ -950,7 +962,7 @@ class GameState:
     ) -> None:
         """Helper method to iterate ray directions for sliding pieces (Rook, Bishop, Queen)."""
         piece_pinned = False
-        pin_direction = ()
+        pin_direction: tuple[int, int] | tuple[()] = ()
         if (row, col) in self.pins:
             piece_pinned = True
             pin_direction = self.pins[(row, col)]
