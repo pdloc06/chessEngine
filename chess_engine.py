@@ -12,11 +12,45 @@ The move generator works in two phases:
 The UI uses generated legal moves directly by matching clicked start/end squares
 against the legal move list and calling `make_move()` with the matching `Move`.
 
-This structure also supports future AI/search code: use `get_valid_moves(for_ai=True)`
-to expand nodes, and `make_ai_move()` to traverse the tree efficiently.
+This structure also supports AI/search code: use `get_valid_moves(for_ai=True)`
+to expand nodes, and `make_ai_move()` / `unmake_ai_move()` to traverse the tree
+efficiently. Every position is additionally identified by an incrementally
+updated Zobrist key (`zobrist_key`) so search code can use transposition tables
+and repetition detection with O(1) hashing per move.
 """
-
+import random
 from dataclasses import dataclass
+
+# --- Shared movement geometry (module-level so they are built only once) ---
+ORTHOGONAL_DIRECTIONS: tuple[tuple[int, int], ...] = ((-1, 0), (1, 0), (0, -1), (0, 1))
+DIAGONAL_DIRECTIONS: tuple[tuple[int, int], ...] = ((-1, -1), (1, 1), (1, -1), (-1, 1))
+ALL_DIRECTIONS: tuple[tuple[int, int], ...] = (
+    (-1, 0), (0, -1), (1, 0), (0, 1),
+    (-1, -1), (-1, 1), (1, -1), (1, 1)
+)
+KNIGHT_DELTAS: tuple[tuple[int, int], ...] = (
+    (-2, -1), (-2, 1), (-1, -2), (-1, 2),
+    (1, -2), (1, 2), (2, -1), (2, 1)
+)
+
+# Lightweight AI move-type codes used in 5-element move tuples
+# 0=Normal, 1=Castle, 2=En Passant, 3=Promo(Q), 4=Promo(R), 5=Promo(B), 6=Promo(N)
+AI_PROMO_PIECES: dict[int, str] = {3: 'Q', 4: 'R', 5: 'B', 6: 'N'}
+AI_PROMO_CODES: dict[str, int] = {'Q': 3, 'R': 4, 'B': 5, 'N': 6}
+
+# --- Zobrist hashing tables (seeded for reproducibility across runs) ---
+_zobrist_rng = random.Random(20260716)
+_PIECE_CODES: tuple[str, ...] = (
+    'wP', 'wN', 'wB', 'wR', 'wQ', 'wK',
+    'bP', 'bN', 'bB', 'bR', 'bQ', 'bK'
+)
+ZOBRIST_PIECES: dict[str, list[list[int]]] = {
+    piece: [[_zobrist_rng.getrandbits(64) for _ in range(8)] for _ in range(8)]
+    for piece in _PIECE_CODES
+}
+ZOBRIST_SIDE: int = _zobrist_rng.getrandbits(64)
+ZOBRIST_CASTLING: list[int] = [_zobrist_rng.getrandbits(64) for _ in range(16)]
+ZOBRIST_EP_FILE: list[int] = [_zobrist_rng.getrandbits(64) for _ in range(8)]
 
 
 @dataclass
@@ -46,7 +80,8 @@ class Move:
     Representation of a single chess move.
 
     Stores source and destination squares, move type constraints, and provides
-    functions to convert movements into standard algebraic chess notation.
+    functions to convert movements into standard algebraic chess notation and
+    UCI coordinate notation.
     """
     NORMAL = 'normal'
     EN_PASSANT = 'en_passant'
@@ -56,6 +91,8 @@ class Move:
     # Translation dictionaries for chess notation
     ROWS_TO_RANKS = {0: '8', 1: '7', 2: '6', 3: '5', 4: '4', 5: '3', 6: '2', 7: '1'}
     COLS_TO_FILES = {0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e', 5: 'f', 6: 'g', 7: 'h'}
+    RANKS_TO_ROWS = {rank: row for row, rank in ROWS_TO_RANKS.items()}
+    FILES_TO_COLS = {file: col for col, file in COLS_TO_FILES.items()}
 
     def __init__(
         self,
@@ -134,6 +171,58 @@ class Move:
             promotion_piece=promotion_piece,
         )
 
+    @classmethod
+    def from_ai_tuple(cls, move_tuple: tuple[int, int, int, int, int], board: list[list[str]]) -> 'Move':
+        """
+        Rebuild a full Move object from a lightweight AI move tuple.
+
+        This is the bridge between the AI search layer (which works on
+        5-element tuples for speed) and the UI layer (which needs full Move
+        objects for animation, notation, and undo support).
+
+        Parameters
+        ----------
+        move_tuple : tuple of int
+            Format: (start_row, start_col, end_row, end_col, move_type)
+            Types: 0=Normal, 1=Castle, 2=En Passant, 3=Promo(Q), 4=R, 5=B, 6=N
+        board : list of list of str
+            The board array *before* the move is executed.
+
+        Returns
+        -------
+        Move
+            The equivalent fully-featured Move object.
+        """
+        start_row, start_col, end_row, end_col, move_type = move_tuple
+        start_sq, end_sq = (start_row, start_col), (end_row, end_col)
+
+        if move_type == 1:
+            return cls.castle(start_sq, end_sq, board)
+        if move_type == 2:
+            return cls.en_passant(start_sq, end_sq, board)
+        if move_type >= 3:
+            return cls.promotion(start_sq, end_sq, board, promotion_piece=AI_PROMO_PIECES[move_type])
+        return cls.normal(start_sq, end_sq, board)
+
+    def to_ai_tuple(self) -> tuple[int, int, int, int, int]:
+        """
+        Convert this Move into the lightweight 5-element AI tuple format.
+
+        Returns
+        -------
+        tuple of int
+            Format: (start_row, start_col, end_row, end_col, move_type).
+        """
+        if self.move_type == self.CASTLE:
+            code = 1
+        elif self.move_type == self.EN_PASSANT:
+            code = 2
+        elif self.move_type == self.PROMOTION:
+            code = AI_PROMO_CODES[self.promotion_piece]
+        else:
+            code = 0
+        return self.start_row, self.start_col, self.end_row, self.end_col, code
+
     def __eq__(self, other: object) -> bool:
         """Determine equality between this move and another object."""
         if isinstance(other, Move):
@@ -202,6 +291,24 @@ class Move:
 
         return notation
 
+    def get_uci_notation(self) -> str:
+        """
+        Construct the UCI coordinate notation for the move (e.g., 'e2e4', 'e7e8q').
+
+        AI_PLANNING: This is the notation format the Lichess Bot API and every
+        UCI-compatible chess GUI exchange moves in. The uci.py adapter relies
+        on this method to report the engine's chosen move.
+
+        Returns
+        -------
+        str
+            The UCI string of the move, including a lowercase promotion suffix.
+        """
+        uci = self._get_file_rank(self.start_row, self.start_col) + self._get_file_rank(self.end_row, self.end_col)
+        if self.is_pawn_promotion:
+            uci += self.promotion_piece.lower()
+        return uci
+
     def _get_file_rank(self, row: int, col: int) -> str:
         """Convert matrix coordinates to standard board notations (e.g., 'e4')."""
         return self.COLS_TO_FILES[col] + self.ROWS_TO_RANKS[row]
@@ -212,12 +319,12 @@ class GameState:
     Stores all information about the current state of the game.
 
     Determines valid moves at the current state and maintains a log of
-    made moves, castling rights, and en-passant squares.
+    made moves, castling rights, en-passant squares, and Zobrist keys.
     """
 
     def __init__(self) -> None:
         """Initialize the game state, placing pieces on their starting squares."""
-        self.board = [
+        self.board: list[list[str]] = [
             ['bR', 'bN', 'bB', 'bQ', 'bK', 'bB', 'bN', 'bR'],
             ['bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP'],
             ['--', '--', '--', '--', '--', '--', '--', '--'],
@@ -293,6 +400,11 @@ class GameState:
         self.state_counts[initial_state] = 1
         self.state_log.append(initial_state)
 
+        # Zobrist hashing: incremental 64-bit key of the current position.
+        # `zobrist_history` mirrors `state_log` for repetition-aware AI search.
+        self.zobrist_key: int = self.compute_zobrist_key()
+        self.zobrist_history: list[int] = [self.zobrist_key]
+
     @property
     def friendly_color(self) -> str:
         """Get the color character of the player whose turn it is."""
@@ -303,7 +415,203 @@ class GameState:
         """Get the color character of the opposing player."""
         return 'b' if self.white_to_move else 'w'
 
-    def get_valid_moves(self, for_ai: bool = False) -> list['Move'] | list[tuple[int, int, int, int, int]]:
+    # ------------------------------------------------------------------
+    # Position hashing and FEN interoperability
+    # ------------------------------------------------------------------
+    def compute_zobrist_key(self) -> int:
+        """
+        Compute the full Zobrist hash key of the current position from scratch.
+
+        The key XORs together random 64-bit numbers for every piece placement,
+        the side to move, the castling-rights combination, and the en-passant
+        file. `make_ai_move()` maintains the same key incrementally, so this
+        full scan is only needed at initialization or after arbitrary board
+        edits (e.g., loading a FEN or building test fixtures).
+
+        Returns
+        -------
+        int
+            The 64-bit Zobrist key identifying this position.
+        """
+        key = 0
+        board = self.board
+        for row in range(8):
+            for col in range(8):
+                piece = board[row][col]
+                if piece != '--':
+                    key ^= ZOBRIST_PIECES[piece][row][col]
+
+        if not self.white_to_move:
+            key ^= ZOBRIST_SIDE
+
+        key ^= ZOBRIST_CASTLING[self._castle_rights_index()]
+
+        if self.enpassant_possible is not None:
+            key ^= ZOBRIST_EP_FILE[self.enpassant_possible[1]]
+
+        return key
+
+    def _castle_rights_index(self) -> int:
+        """Pack the four castling-right booleans into a 0-15 table index."""
+        return (
+            (8 if self.white_castle_king_side else 0)
+            | (4 if self.white_castle_queen_side else 0)
+            | (2 if self.black_castle_king_side else 0)
+            | (1 if self.black_castle_queen_side else 0)
+        )
+
+    def refresh_derived_state(self) -> None:
+        """
+        Recompute all caches derived from the raw board array.
+
+        Call this after directly editing `board`, `white_to_move`, castling
+        rights, or `enpassant_possible` (as test fixtures and FEN loading do)
+        so the piece sets, king locations, Zobrist key, and repetition logs
+        become consistent again.
+
+        Returns
+        -------
+        None
+        """
+        self.white_pieces.clear()
+        self.black_pieces.clear()
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece != '--':
+                    if piece[0] == 'w':
+                        self.white_pieces.add((row, col))
+                        if piece[1] == 'K':
+                            self.white_king_location = (row, col)
+                    else:
+                        self.black_pieces.add((row, col))
+                        if piece[1] == 'K':
+                            self.black_king_location = (row, col)
+
+        initial_state = self.get_board_state()
+        self.state_counts = {initial_state: 1}
+        self.state_log = [initial_state]
+        self.zobrist_key = self.compute_zobrist_key()
+        self.zobrist_history = [self.zobrist_key]
+
+    @classmethod
+    def from_fen(cls, fen: str) -> 'GameState':
+        """
+        Build a GameState from a FEN (Forsyth-Edwards Notation) string.
+
+        AI_PLANNING: FEN parsing is a prerequisite for playing on Lichess.
+        The Lichess Bot API (and the UCI protocol) describe positions as
+        FEN + a list of UCI moves; uci.py uses this to synchronize the
+        engine with the server's game state.
+
+        Parameters
+        ----------
+        fen : str
+            A standard 6-field FEN string, e.g.
+            'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'.
+
+        Returns
+        -------
+        GameState
+            A fully initialized game state matching the FEN position.
+
+        Raises
+        ------
+        ValueError
+            If the FEN string does not contain the required fields.
+        """
+        fields = fen.split()
+        if len(fields) < 4:
+            raise ValueError(f'Invalid FEN (expected at least 4 fields): {fen!r}')
+
+        placement, side, castling, ep = fields[0], fields[1], fields[2], fields[3]
+        halfmove = int(fields[4]) if len(fields) > 4 else 0
+
+        gs = cls()
+        gs.board = [['--'] * 8 for _ in range(8)]
+        for row_index, rank_str in enumerate(placement.split('/')):
+            col = 0
+            for char in rank_str:
+                if char.isdigit():
+                    col += int(char)
+                else:
+                    color = 'w' if char.isupper() else 'b'
+                    gs.board[row_index][col] = color + char.upper()
+                    col += 1
+
+        gs.white_to_move = side == 'w'
+        gs.white_castle_king_side = 'K' in castling
+        gs.white_castle_queen_side = 'Q' in castling
+        gs.black_castle_king_side = 'k' in castling
+        gs.black_castle_queen_side = 'q' in castling
+        gs.castle_rights_log = [
+            CastleRights(
+                gs.white_castle_king_side,
+                gs.white_castle_queen_side,
+                gs.black_castle_king_side,
+                gs.black_castle_queen_side
+            )
+        ]
+
+        if ep != '-':
+            gs.enpassant_possible = (Move.RANKS_TO_ROWS[ep[1]], Move.FILES_TO_COLS[ep[0]])
+        else:
+            gs.enpassant_possible = None
+        gs.enpassant_possible_log = [gs.enpassant_possible]
+
+        gs.halfmove_clock = halfmove
+        gs.refresh_derived_state()
+        return gs
+
+    def to_fen(self) -> str:
+        """
+        Serialize the current position into a FEN string.
+
+        Returns
+        -------
+        str
+            The 6-field FEN string of the current position. The fullmove
+            counter is derived from the move log length.
+        """
+        rank_strings = []
+        for row in range(8):
+            rank = ''
+            empty_run = 0
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece == '--':
+                    empty_run += 1
+                else:
+                    if empty_run:
+                        rank += str(empty_run)
+                        empty_run = 0
+                    rank += piece[1].upper() if piece[0] == 'w' else piece[1].lower()
+            if empty_run:
+                rank += str(empty_run)
+            rank_strings.append(rank)
+
+        castling = ''
+        if self.white_castle_king_side: castling += 'K'
+        if self.white_castle_queen_side: castling += 'Q'
+        if self.black_castle_king_side: castling += 'k'
+        if self.black_castle_queen_side: castling += 'q'
+        castling = castling or '-'
+
+        if self.enpassant_possible is not None:
+            ep = Move.COLS_TO_FILES[self.enpassant_possible[1]] + Move.ROWS_TO_RANKS[self.enpassant_possible[0]]
+        else:
+            ep = '-'
+
+        fullmove = len(self.move_log) // 2 + 1
+        return (
+            '/'.join(rank_strings)
+            + f' {"w" if self.white_to_move else "b"} {castling} {ep} {self.halfmove_clock} {fullmove}'
+        )
+
+    # ------------------------------------------------------------------
+    # Legal move generation
+    # ------------------------------------------------------------------
+    def get_valid_moves(self, for_ai: bool = False) -> list:
         """
         Generate all legal moves in the current position.
 
@@ -314,8 +622,15 @@ class GameState:
         Parameters
         ----------
         for_ai : bool, optional
-            Flag to toggle output format. If False, returns Move objects. If
-            True, returns lightweight 5-element tuples optimized for AI.
+            Flag to toggle output format. If False, returns Move objects with
+            notation metadata and draw-rule enforcement. If True, returns
+            lightweight 5-element tuples and skips draw-rule hashing entirely,
+            because the search layer handles repetition via Zobrist keys.
+
+        Returns
+        -------
+        list of Move or list of tuple of int
+            The legal moves available to the side to move.
         """
         moves = []
         self.in_check, self.pins, self.checks = self._check_pins_checks()
@@ -357,6 +672,32 @@ class GameState:
         else:
             moves = self._get_all_possible_moves(for_ai=for_ai)
 
+        # Filter out invalid En Passant moves that expose a horizontal pin.
+        # This runs before mate/stalemate evaluation so an illegal en passant
+        # can never masquerade as the "only" escape move.
+        for i in range(len(moves) - 1, -1, -1):
+            if for_ai:
+                if moves[i][4] == 2:  # En Passant move type index
+                    undo_package = self.make_ai_move(moves[i])
+                    # make_ai_move switches the turn to the enemy. We must switch it back
+                    # momentarily to check if our own king is in check.
+                    self.white_to_move = not self.white_to_move
+                    in_check, _, _ = self._check_pins_checks()
+                    # Revert the turn back before unmaking the move entirely
+                    self.white_to_move = not self.white_to_move
+                    self.unmake_ai_move(moves[i], undo_package)
+                    if in_check:
+                        del moves[i]
+            else:
+                if moves[i].move_type == Move.EN_PASSANT:
+                    self.make_move(moves[i], annotate=False)
+                    self.white_to_move = not self.white_to_move
+                    in_check, _, _ = self._check_pins_checks()
+                    self.white_to_move = not self.white_to_move
+                    self.unmake_move()
+                    if in_check:
+                        del moves[i]
+
         # Evaluate Checkmate or Stalemate statuses
         if len(moves) == 0:
             if self.in_check:
@@ -367,11 +708,14 @@ class GameState:
             self.is_checkmate = False
             self.is_stalemate = False
 
-            # Draw conditions (50-move limit or 3-fold repetition)
-            current_state = self.get_board_state()
-            if self.halfmove_clock >= 100 or self.state_counts.get(current_state, 0) >= 3:
-                self.is_stalemate = True
-                moves = []
+            # Draw conditions (50-move limit or 3-fold repetition).
+            # Skipped for AI: make_ai_move doesn't maintain these logs, and
+            # hashing the whole board at every node would dominate search time.
+            if not for_ai:
+                current_state = self.get_board_state()
+                if self.halfmove_clock >= 100 or self.state_counts.get(current_state, 0) >= 3:
+                    self.is_stalemate = True
+                    moves = []
 
         # Calculate Ambiguous Notation mapping for UI
         if not for_ai and len(moves) > 0:
@@ -398,32 +742,11 @@ class GameState:
                                     Move.COLS_TO_FILES[move.start_col] + Move.ROWS_TO_RANKS[move.start_row]
                                 )
 
-        # Filter out invalid En Passant moves that expose a horizontal pin
-        for i in range(len(moves) - 1, -1, -1):
-            if for_ai:
-                if moves[i][4] == 2:  # En Passant move type index
-                    undo_package = self.make_ai_move(moves[i])
-                    # make_ai_move switches the turn to the enemy. We must switch it back
-                    # momentarily to check if our own king is in check.
-                    self.white_to_move = not self.white_to_move
-                    in_check, _, _ = self._check_pins_checks()
-                    # Revert the turn back before unmaking the move entirely
-                    self.white_to_move = not self.white_to_move
-                    self.unmake_ai_move(moves[i], undo_package)
-                    if in_check:
-                        del moves[i]
-            else:
-                if moves[i].move_type == Move.EN_PASSANT:
-                    self.make_move(moves[i], annotate=False)
-                    self.white_to_move = not self.white_to_move
-                    in_check, _, _ = self._check_pins_checks()
-                    self.white_to_move = not self.white_to_move
-                    self.unmake_move()
-                    if in_check:
-                        del moves[i]
-
         return moves
 
+    # ------------------------------------------------------------------
+    # Full (UI) move execution
+    # ------------------------------------------------------------------
     def make_move(self, move: 'Move', annotate: bool = True) -> None:
         """
         Execute a chess move on the board and update the game state.
@@ -511,6 +834,11 @@ class GameState:
         self.state_log.append(current_state)
         self.state_counts[current_state] = self.state_counts.get(current_state, 0) + 1
 
+        # UI moves are rare relative to search nodes, so a full Zobrist
+        # recompute here is simpler than a second incremental update path
+        self.zobrist_key = self.compute_zobrist_key()
+        self.zobrist_history.append(self.zobrist_key)
+
     def unmake_move(self) -> None:
         """
         Undo the last move made in the game.
@@ -526,6 +854,9 @@ class GameState:
         self.state_counts[current_state] -= 1
         if self.state_counts[current_state] == 0:
             del self.state_counts[current_state]
+
+        self.zobrist_history.pop()
+        self.zobrist_key = self.zobrist_history[-1]
 
         self.halfmove_clock = self.halfmove_clock_log.pop()
 
@@ -590,6 +921,11 @@ class GameState:
         Converts the 2D mutable board list into a nested tuple. Using tuples
         eliminates memory allocation overhead during the AI's deep tree search
         and functions reliably as a hashable dictionary key.
+
+        Returns
+        -------
+        tuple
+            (board_tuple, enpassant, wks, wqs, bks, bqs, white_to_move).
         """
         board_tuple = tuple(tuple(row) for row in self.board)
         return (
@@ -602,13 +938,20 @@ class GameState:
             self.white_to_move
         )
 
-    def make_ai_move(self, move_tuple: tuple[int, int, int, int, int]) -> tuple[str, tuple, tuple]:
+    # ------------------------------------------------------------------
+    # Lightweight (AI search) move execution
+    # ------------------------------------------------------------------
+    def make_ai_move(
+            self,
+            move_tuple: tuple[int, int, int, int, int]
+    ) -> tuple[str, tuple[int, int] | None, tuple[bool, bool, bool, bool], int]:
         """
         Execute a lightweight move specifically optimized for AI search trees.
 
-        Note: This does not update the `halfmove_clock` or `state_counts` logs
-        for performance. Transposition tables should handle repetition tracking
-        in external search algorithms.
+        Maintains the board array, piece tracking sets, king locations,
+        castling rights, en-passant square, and the incremental Zobrist key.
+        It deliberately does NOT update `move_log`, `halfmove_clock`, or
+        `state_counts`; the search layer tracks repetitions via Zobrist keys.
 
         Parameters
         ----------
@@ -619,21 +962,33 @@ class GameState:
         Returns
         -------
         tuple
-            An undo package structured as (captured_piece, old_enpassant, old_castle_rights_tuple).
+            An undo package structured as
+            (captured_piece, old_enpassant, old_castle_rights_tuple, old_zobrist_key).
         """
         start_row, start_col, end_row, end_col, move_type = move_tuple
+        board = self.board
 
-        piece_moved = self.board[start_row][start_col]
-        captured_piece = self.board[end_row][end_col]
+        piece_moved = board[start_row][start_col]
+        captured_piece = board[end_row][end_col]
 
         old_castle_rights = (
             self.white_castle_king_side, self.white_castle_queen_side,
             self.black_castle_king_side, self.black_castle_queen_side
         )
         old_enpassant = self.enpassant_possible
+        old_zobrist = self.zobrist_key
+        old_rights_index = self._castle_rights_index()
 
-        self.board[start_row][start_col] = '--'
-        self.board[end_row][end_col] = piece_moved
+        is_white = piece_moved[0] == 'w'
+        friendly_pieces = self.white_pieces if is_white else self.black_pieces
+        enemy_pieces = self.black_pieces if is_white else self.white_pieces
+
+        board[start_row][start_col] = '--'
+        board[end_row][end_col] = piece_moved
+        friendly_pieces.remove((start_row, start_col))
+        friendly_pieces.add((end_row, end_col))
+
+        key = old_zobrist ^ ZOBRIST_PIECES[piece_moved][start_row][start_col]
 
         if piece_moved == 'wK':
             self.white_king_location = (end_row, end_col)
@@ -646,19 +1001,41 @@ class GameState:
 
         if move_type == 1:  # Castle
             if end_col - start_col == 2:  # King side
-                self.board[end_row][end_col - 1] = self.board[end_row][end_col + 1]
-                self.board[end_row][end_col + 1] = '--'
+                rook = board[end_row][end_col + 1]
+                board[end_row][end_col - 1] = rook
+                board[end_row][end_col + 1] = '--'
+                friendly_pieces.remove((end_row, end_col + 1))
+                friendly_pieces.add((end_row, end_col - 1))
+                key ^= ZOBRIST_PIECES[rook][end_row][end_col + 1] ^ ZOBRIST_PIECES[rook][end_row][end_col - 1]
             else:  # Queen side
-                self.board[end_row][end_col + 1] = self.board[end_row][end_col - 2]
-                self.board[end_row][end_col - 2] = '--'
+                rook = board[end_row][end_col - 2]
+                board[end_row][end_col + 1] = rook
+                board[end_row][end_col - 2] = '--'
+                friendly_pieces.remove((end_row, end_col - 2))
+                friendly_pieces.add((end_row, end_col + 1))
+                key ^= ZOBRIST_PIECES[rook][end_row][end_col - 2] ^ ZOBRIST_PIECES[rook][end_row][end_col + 1]
+            key ^= ZOBRIST_PIECES[piece_moved][end_row][end_col]
 
         elif move_type == 2:  # En Passant
-            self.board[start_row][end_col] = '--'
-            captured_piece = 'bP' if piece_moved == 'wP' else 'wP'
+            board[start_row][end_col] = '--'
+            captured_piece = 'bP' if is_white else 'wP'
+            enemy_pieces.remove((start_row, end_col))
+            key ^= ZOBRIST_PIECES[captured_piece][start_row][end_col]
+            key ^= ZOBRIST_PIECES[piece_moved][end_row][end_col]
 
         elif move_type >= 3:  # Promotions
-            promo_map = {3: 'Q', 4: 'R', 5: 'B', 6: 'N'}
-            self.board[end_row][end_col] = piece_moved[0] + promo_map[move_type]
+            promoted = piece_moved[0] + AI_PROMO_PIECES[move_type]
+            board[end_row][end_col] = promoted
+            if captured_piece != '--':
+                enemy_pieces.remove((end_row, end_col))
+                key ^= ZOBRIST_PIECES[captured_piece][end_row][end_col]
+            key ^= ZOBRIST_PIECES[promoted][end_row][end_col]
+
+        else:  # Normal moves
+            if captured_piece != '--':
+                enemy_pieces.remove((end_row, end_col))
+                key ^= ZOBRIST_PIECES[captured_piece][end_row][end_col]
+            key ^= ZOBRIST_PIECES[piece_moved][end_row][end_col]
 
         if piece_moved[1] == 'P' and abs(start_row - end_row) == 2:
             self.enpassant_possible = ((start_row + end_row) // 2, end_col)
@@ -682,40 +1059,73 @@ class GameState:
                 elif end_col == 7: self.black_castle_king_side = False
 
         self.white_to_move = not self.white_to_move
-        return captured_piece, old_enpassant, old_castle_rights
+
+        # Finalize the incremental Zobrist key: side, castling delta, EP files
+        key ^= ZOBRIST_SIDE
+        new_rights_index = self._castle_rights_index()
+        if new_rights_index != old_rights_index:
+            key ^= ZOBRIST_CASTLING[old_rights_index] ^ ZOBRIST_CASTLING[new_rights_index]
+        if old_enpassant is not None:
+            key ^= ZOBRIST_EP_FILE[old_enpassant[1]]
+        if self.enpassant_possible is not None:
+            key ^= ZOBRIST_EP_FILE[self.enpassant_possible[1]]
+        self.zobrist_key = key
+
+        return captured_piece, old_enpassant, old_castle_rights, old_zobrist
 
     def unmake_ai_move(
             self,
             move_tuple: tuple[int, int, int, int, int],
-            undo_package: tuple[str, tuple, tuple]
+            undo_package: tuple[str, tuple[int, int] | None, tuple[bool, bool, bool, bool], int]
     ) -> None:
         """
-        Reverse state changes made by make_ai_move directly using primitive data.
+        Reverse state changes made by `make_ai_move` directly using primitive data.
+
+        Parameters
+        ----------
+        move_tuple : tuple of int
+            The exact move tuple originally passed to `make_ai_move`.
+        undo_package : tuple
+            The package returned by the corresponding `make_ai_move` call.
         """
         start_row, start_col, end_row, end_col, move_type = move_tuple
-        captured_piece, old_enpassant, old_castle_rights = undo_package
+        captured_piece, old_enpassant, old_castle_rights, old_zobrist = undo_package
+        board = self.board
 
         self.white_to_move = not self.white_to_move
-        piece_moved = self.board[end_row][end_col]
+        piece_moved = board[end_row][end_col]
 
         if move_type >= 3:  # Promotion
             piece_moved = piece_moved[0] + 'P'
 
-        self.board[start_row][start_col] = piece_moved
+        is_white = piece_moved[0] == 'w'
+        friendly_pieces = self.white_pieces if is_white else self.black_pieces
+        enemy_pieces = self.black_pieces if is_white else self.white_pieces
+
+        board[start_row][start_col] = piece_moved
+        friendly_pieces.remove((end_row, end_col))
+        friendly_pieces.add((start_row, start_col))
 
         if move_type == 2:  # En Passant
-            self.board[end_row][end_col] = '--'
-            self.board[start_row][end_col] = captured_piece
+            board[end_row][end_col] = '--'
+            board[start_row][end_col] = captured_piece
+            enemy_pieces.add((start_row, end_col))
         else:
-            self.board[end_row][end_col] = captured_piece
+            board[end_row][end_col] = captured_piece
+            if captured_piece != '--':
+                enemy_pieces.add((end_row, end_col))
 
         if move_type == 1:  # Castle
             if end_col - start_col == 2:
-                self.board[end_row][end_col + 1] = self.board[end_row][end_col - 1]
-                self.board[end_row][end_col - 1] = '--'
+                board[end_row][end_col + 1] = board[end_row][end_col - 1]
+                board[end_row][end_col - 1] = '--'
+                friendly_pieces.remove((end_row, end_col - 1))
+                friendly_pieces.add((end_row, end_col + 1))
             else:
-                self.board[end_row][end_col - 2] = self.board[end_row][end_col + 1]
-                self.board[end_row][end_col + 1] = '--'
+                board[end_row][end_col - 2] = board[end_row][end_col + 1]
+                board[end_row][end_col + 1] = '--'
+                friendly_pieces.remove((end_row, end_col + 1))
+                friendly_pieces.add((end_row, end_col - 2))
 
         if piece_moved == 'wK':
             self.white_king_location = (start_row, start_col)
@@ -725,15 +1135,59 @@ class GameState:
         self.enpassant_possible = old_enpassant
         (self.white_castle_king_side, self.white_castle_queen_side,
          self.black_castle_king_side, self.black_castle_queen_side) = old_castle_rights
+        self.zobrist_key = old_zobrist
 
+    def make_null_move(self) -> tuple[tuple[int, int] | None, int]:
+        """
+        Pass the turn without moving a piece (for null-move pruning).
+
+        The side to move flips and the en-passant square clears, exactly as
+        if the player "skipped" their turn. Only legal inside AI search.
+
+        Returns
+        -------
+        tuple
+            (old_enpassant, old_zobrist_key) to feed into `unmake_null_move`.
+        """
+        old_enpassant = self.enpassant_possible
+        old_zobrist = self.zobrist_key
+
+        key = old_zobrist ^ ZOBRIST_SIDE
+        if old_enpassant is not None:
+            key ^= ZOBRIST_EP_FILE[old_enpassant[1]]
+
+        self.enpassant_possible = None
+        self.white_to_move = not self.white_to_move
+        self.zobrist_key = key
+        return old_enpassant, old_zobrist
+
+    def unmake_null_move(self, undo_package: tuple[tuple[int, int] | None, int]) -> None:
+        """
+        Reverse a `make_null_move` call.
+
+        Parameters
+        ----------
+        undo_package : tuple
+            The package returned by the corresponding `make_null_move` call.
+        """
+        old_enpassant, old_zobrist = undo_package
+        self.white_to_move = not self.white_to_move
+        self.enpassant_possible = old_enpassant
+        self.zobrist_key = old_zobrist
+
+    # ------------------------------------------------------------------
+    # Pseudo-legal move generation per piece
+    # ------------------------------------------------------------------
     def _get_all_possible_moves(self, for_ai: bool = False) -> list:
         """Scan active pieces and fetch logic bounds for pseudo-legal moves."""
-        possible_moves: list[Move] = []
+        possible_moves: list = []
         active_pieces: set[tuple[int, int]] = self.white_pieces if self.white_to_move else self.black_pieces
+        board = self.board
+        move_functions = self.move_functions
 
         for row, col in active_pieces:
-            piece = self.board[row][col][1]
-            self.move_functions[piece](row, col, possible_moves, for_ai)
+            piece = board[row][col][1]
+            move_functions[piece](row, col, possible_moves, for_ai)
             if piece == 'K':
                 self._get_castle_moves(row, col, possible_moves, for_ai)
         return possible_moves
@@ -751,31 +1205,29 @@ class GameState:
         tuple
             (in_check: bool, pins: dict[(row, col): (d_row, d_col)], checks: list[(row, col, d_row, d_col)])
         """
-        pins = {}
-        checks = []
+        pins: dict[tuple[int, int], tuple[int, int]] = {}
+        checks: list[tuple[int, int, int, int]] = []
         in_check = False
         row, col = self.white_king_location if self.white_to_move else self.black_king_location
-        directions = (
-            (-1, 0), (0, -1), (1, 0), (0, 1),
-            (-1, -1), (-1, 1), (1, -1), (1, 1)
-        )
+        board = self.board
+        friendly_color = 'w' if self.white_to_move else 'b'
+        enemy_color = 'b' if self.white_to_move else 'w'
 
-        for i in range(len(directions)):
-            d = directions[i]
+        for i, d in enumerate(ALL_DIRECTIONS):
             possible_pins: tuple = ()
             for j in range(1, 8):
                 end_row = row + d[0] * j
                 end_col = col + d[1] * j
-                if self._is_on_board(end_row, end_col):
-                    end_piece = self.board[end_row][end_col]
+                if 0 <= end_row < 8 and 0 <= end_col < 8:
+                    end_piece = board[end_row][end_col]
 
                     # Ignore moving phantom King to prevent false blocks
-                    if end_piece[0] == self.friendly_color and end_piece[1] != 'K':
+                    if end_piece[0] == friendly_color and end_piece[1] != 'K':
                         if len(possible_pins) == 0:
                             possible_pins = (end_row, end_col, d[0], d[1])
                         else:
                             break
-                    elif end_piece[0] == self.enemy_color:
+                    elif end_piece[0] == enemy_color:
                         enemy_piece_type = end_piece[1]
 
                         if (
@@ -784,8 +1236,8 @@ class GameState:
                             or (
                                 j == 1
                                 and (
-                                        (self.enemy_color == 'b' and 4 <= i <= 5)
-                                        or (self.enemy_color == 'w' and 6 <= i <= 7)
+                                        (enemy_color == 'b' and 4 <= i <= 5)
+                                        or (enemy_color == 'w' and 6 <= i <= 7)
                                 )
                                 and enemy_piece_type == 'P'
                             )
@@ -805,16 +1257,12 @@ class GameState:
                     break
 
         # Check for Knight attacks (they bypass pins)
-        knight_moves = (
-            (-2, -1), (-2, 1), (-1, -2), (-1, 2),
-            (1, -2), (1, 2), (2, -1), (2, 1)
-        )
-        for move in knight_moves:
+        for move in KNIGHT_DELTAS:
             end_row = row + move[0]
             end_col = col + move[1]
-            if self._is_on_board(end_row, end_col):
-                end_piece = self.board[end_row][end_col]
-                if end_piece[0] == self.enemy_color and end_piece[1] == 'N':
+            if 0 <= end_row < 8 and 0 <= end_col < 8:
+                end_piece = board[end_row][end_col]
+                if end_piece[0] == enemy_color and end_piece[1] == 'N':
                     in_check = True
                     checks.append((end_row, end_col, move[0], move[1]))
                     break
@@ -828,19 +1276,14 @@ class GameState:
         """
         enemy_color = 'b' if self.white_to_move else 'w'
         friendly_color = 'w' if self.white_to_move else 'b'
+        board = self.board
 
-        directions = (
-            (-1, 0), (0, -1), (1, 0), (0, 1),
-            (-1, -1), (-1, 1), (1, -1), (1, 1)
-        )
-
-        for i in range(len(directions)):
-            d = directions[i]
+        for i, d in enumerate(ALL_DIRECTIONS):
             for j in range(1, 8):
                 end_row = row + d[0] * j
                 end_col = col + d[1] * j
-                if self._is_on_board(end_row, end_col):
-                    end_piece = self.board[end_row][end_col]
+                if 0 <= end_row < 8 and 0 <= end_col < 8:
+                    end_piece = board[end_row][end_col]
 
                     if end_piece[0] == friendly_color and end_piece[1] != 'K':
                         break
@@ -861,15 +1304,11 @@ class GameState:
                 else:
                     break
 
-        knight_moves = (
-            (-2, -1), (-2, 1), (-1, -2), (-1, 2),
-            (1, -2), (1, 2), (2, -1), (2, 1)
-        )
-        for m in knight_moves:
+        for m in KNIGHT_DELTAS:
             end_row = row + m[0]
             end_col = col + m[1]
-            if self._is_on_board(end_row, end_col):
-                end_piece = self.board[end_row][end_col]
+            if 0 <= end_row < 8 and 0 <= end_col < 8:
+                end_piece = board[end_row][end_col]
                 if end_piece[0] == enemy_color and end_piece[1] == 'N':
                     return True
 
@@ -921,7 +1360,7 @@ class GameState:
                             Move.normal((row, col), (row + 2 * move_amount, col), self.board)
                         )
 
-        for col_offset in [-1, 1]:
+        for col_offset in (-1, 1):
             new_col = col + col_offset
             if 0 <= new_col < 8:
                 if not piece_pinned or pin_direction == (move_amount, col_offset):
@@ -939,13 +1378,11 @@ class GameState:
 
     def _get_rook_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
         """Get all pseudo-legal moves for a rook at the specified location."""
-        directions = ((-1, 0), (1, 0), (0, -1), (0, 1))
-        self._get_sliding_moves(row, col, possible_moves, directions, for_ai)
+        self._get_sliding_moves(row, col, possible_moves, ORTHOGONAL_DIRECTIONS, for_ai)
 
     def _get_bishop_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
         """Get all pseudo-legal moves for a bishop at the specified location."""
-        directions = ((-1, -1), (1, 1), (1, -1), (-1, 1))
-        self._get_sliding_moves(row, col, possible_moves, directions, for_ai)
+        self._get_sliding_moves(row, col, possible_moves, DIAGONAL_DIRECTIONS, for_ai)
 
     def _get_queen_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
         """Get all pseudo-legal moves for a queen at the specified location."""
@@ -967,67 +1404,73 @@ class GameState:
             piece_pinned = True
             pin_direction = self.pins[(row, col)]
 
+        board = self.board
+        enemy_color = 'b' if self.white_to_move else 'w'
+
         for d in directions:
+            # Skip whole rays early when pinned off-axis (saves the inner loop)
+            if piece_pinned and pin_direction != (d[0], d[1]) and pin_direction != (-d[0], -d[1]):
+                continue
+
             end_row = row
             end_col = col
             while True:
                 end_row += d[0]
                 end_col += d[1]
-                if self._is_on_board(end_row, end_col):
-                    if not piece_pinned or pin_direction == (d[0], d[1]) or pin_direction == (-d[0], -d[1]):
-                        end_piece = self.board[end_row][end_col]
-                        if end_piece == '--':
-                            if for_ai:
-                                possible_moves.append((row, col, end_row, end_col, 0))
-                            else:
-                                possible_moves.append(Move.normal((row, col), (end_row, end_col), self.board))
-                        elif end_piece[0] == self.enemy_color:
-                            if for_ai:
-                                possible_moves.append((row, col, end_row, end_col, 0))
-                            else:
-                                possible_moves.append(Move.normal((row, col), (end_row, end_col), self.board))
-                            break
+                if 0 <= end_row < 8 and 0 <= end_col < 8:
+                    end_piece = board[end_row][end_col]
+                    if end_piece == '--':
+                        if for_ai:
+                            possible_moves.append((row, col, end_row, end_col, 0))
                         else:
-                            break
+                            possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
+                    elif end_piece[0] == enemy_color:
+                        if for_ai:
+                            possible_moves.append((row, col, end_row, end_col, 0))
+                        else:
+                            possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
+                        break
+                    else:
+                        break
                 else:
                     break
 
     def _get_knight_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
         """Get all pseudo-legal moves for a knight at the specified location."""
-        moves = (
-            (-2, -1), (-2, 1), (2, -1), (2, 1),
-            (-1, -2), (1, -2), (-1, 2), (1, 2),
-        )
-        piece_pinned = (row, col) in self.pins
+        # A pinned knight can never move: it cannot stay on the pin ray
+        if (row, col) in self.pins:
+            return
 
-        for move in moves:
+        board = self.board
+        enemy_color = 'b' if self.white_to_move else 'w'
+
+        for move in KNIGHT_DELTAS:
             end_row = row + move[0]
             end_col = col + move[1]
-            if self._is_on_board(end_row, end_col):
-                if not piece_pinned:
-                    end_piece = self.board[end_row][end_col]
-                    if end_piece == '--' or end_piece[0] == self.enemy_color:
-                        if for_ai:
-                            possible_moves.append((row, col, end_row, end_col, 0))
-                        else:
-                            possible_moves.append(Move.normal((row, col), (end_row, end_col), self.board))
+            if 0 <= end_row < 8 and 0 <= end_col < 8:
+                end_piece = board[end_row][end_col]
+                if end_piece == '--' or end_piece[0] == enemy_color:
+                    if for_ai:
+                        possible_moves.append((row, col, end_row, end_col, 0))
+                    else:
+                        possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
 
     def _get_king_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
         """Get all pseudo-legal normal moves for a king validating safe surrounding squares."""
-        row_moves = (-1, -1, -1, 0, 0, 1, 1, 1)
-        col_moves = (-1, 0, 1, -1, 1, -1, 0, 1)
+        board = self.board
+        enemy_color = 'b' if self.white_to_move else 'w'
 
-        for i in range(8):
-            end_row = row + row_moves[i]
-            end_col = col + col_moves[i]
-            if self._is_on_board(end_row, end_col):
-                end_piece = self.board[end_row][end_col]
-                if end_piece == '--' or end_piece[0] == self.enemy_color:
+        for d in ALL_DIRECTIONS:
+            end_row = row + d[0]
+            end_col = col + d[1]
+            if 0 <= end_row < 8 and 0 <= end_col < 8:
+                end_piece = board[end_row][end_col]
+                if end_piece == '--' or end_piece[0] == enemy_color:
                     if not self._is_square_attacked(end_row, end_col):
                         if for_ai:
                             possible_moves.append((row, col, end_row, end_col, 0))
                         else:
-                            possible_moves.append(Move.normal((row, col), (end_row, end_col), self.board))
+                            possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
 
     def _get_castle_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
         """Identify available castling moves bound by legal logic and piece configurations."""
