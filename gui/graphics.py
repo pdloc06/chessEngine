@@ -4,10 +4,72 @@ Handles rendering the chess board, pieces, and interaction highlights.
 This module isolates the graphical drawing routines for the physical board
 elements, ensuring that game state visual representation is cleanly separated
 from user input and UI overlays.
+
+It also owns the two coordinate-translation helpers (`board_to_screen` and
+`screen_to_board`) that every other module uses, so board flipping and the
+player-bar offset are handled in exactly one place.
 """
 from pathlib import Path
 import pygame as pg
 import chess_engine, config
+
+
+def board_to_screen(row: int, col: int, board_flipped: bool) -> tuple[int, int]:
+    """
+    Convert logical board coordinates to on-screen pixel coordinates.
+
+    Accounts for the board orientation (flip) and the vertical offset caused
+    by the top player bar.
+
+    Parameters
+    ----------
+    row : int
+        The logical board row (0 = rank 8).
+    col : int
+        The logical board column (0 = file a).
+    board_flipped : bool
+        Flag indicating whether the board perspective is currently flipped.
+
+    Returns
+    -------
+    tuple of int
+        The (x, y) pixel coordinates of the square's top-left corner.
+    """
+    draw_row = (7 - row) if board_flipped else row
+    draw_col = (7 - col) if board_flipped else col
+    return draw_col * config.SQ_SIZE, config.BOARD_TOP + draw_row * config.SQ_SIZE
+
+
+def screen_to_board(x: int, y: int, board_flipped: bool) -> tuple[int, int] | None:
+    """
+    Convert on-screen pixel coordinates to logical board coordinates.
+
+    Parameters
+    ----------
+    x : int
+        The horizontal pixel coordinate of the click.
+    y : int
+        The vertical pixel coordinate of the click.
+    board_flipped : bool
+        Flag indicating whether the board perspective is currently flipped.
+
+    Returns
+    -------
+    tuple of int or None
+        The logical (row, col) of the clicked square, or None when the click
+        landed outside the board area (player bars or move log panel).
+    """
+    if not (0 <= x < config.BOARD_WIDTH):
+        return None
+    if not (config.BOARD_TOP <= y < config.BOARD_TOP + config.BOARD_HEIGHT):
+        return None
+
+    clicked_col = x // config.SQ_SIZE
+    clicked_row = (y - config.BOARD_TOP) // config.SQ_SIZE
+
+    row = 7 - clicked_row if board_flipped else clicked_row
+    col = 7 - clicked_col if board_flipped else clicked_col
+    return row, col
 
 
 def load_pieces_images(pieces_type: str = 'standard') -> None:
@@ -120,12 +182,13 @@ def draw_board(screen: pg.Surface, coord_font: pg.font.Font, board_flipped: bool
             color_index = (row + col) % 2
             color = config.board_colors[color_index]
 
-            draw_row = (7 - row) if board_flipped else row
-            draw_col = (7 - col) if board_flipped else col
-            rect = pg.Rect(draw_col * config.SQ_SIZE, draw_row * config.SQ_SIZE, config.SQ_SIZE, config.SQ_SIZE)
+            x, y = board_to_screen(row, col, board_flipped)
+            rect = pg.Rect(x, y, config.SQ_SIZE, config.SQ_SIZE)
             pg.draw.rect(screen, color, rect)
 
             color_name = 'white' if color_index == 0 else 'grey'
+            draw_row = (7 - row) if board_flipped else row
+            draw_col = (7 - col) if board_flipped else col
 
             # Render Rank labels (1-8) on the left edge
             if draw_col == 0:
@@ -164,9 +227,8 @@ def draw_pieces(screen: pg.Surface, board: list[list[str]], board_flipped: bool)
         for col in range(config.DIMENSION):
             piece = board[row][col]
             if piece != '--':
-                draw_row = 7 - row if board_flipped else row
-                draw_col = 7 - col if board_flipped else col
-                screen.blit(config.IMAGES[piece], pg.Rect(draw_col * config.SQ_SIZE, draw_row * config.SQ_SIZE, config.SQ_SIZE, config.SQ_SIZE))
+                x, y = board_to_screen(row, col, board_flipped)
+                screen.blit(config.IMAGES[piece], pg.Rect(x, y, config.SQ_SIZE, config.SQ_SIZE))
 
 def highlight_current_square(
     screen: pg.Surface, gs: chess_engine.GameState, valid_moves: list[chess_engine.Move],
@@ -199,9 +261,7 @@ def highlight_current_square(
             current_sq.set_alpha(75)
             current_sq.fill(pg.Color('yellow'))
 
-            draw_row = 7 - row if board_flipped else row
-            draw_col = 7 - col if board_flipped else col
-            screen.blit(current_sq, (draw_col * config.SQ_SIZE, draw_row * config.SQ_SIZE))
+            screen.blit(current_sq, board_to_screen(row, col, board_flipped))
 
             for move in valid_moves:
                 if move.start_row == row and move.start_col == col:
@@ -213,9 +273,7 @@ def highlight_current_square(
                     transparent_green = (100, 180, 120, 175)
                     pg.draw.circle(movable_indicator, transparent_green, (x_center, y_center), radius)
 
-                    m_draw_row = 7 - move.end_row if board_flipped else move.end_row
-                    m_draw_col = 7 - move.end_col if board_flipped else move.end_col
-                    screen.blit(movable_indicator, (m_draw_col * config.SQ_SIZE, m_draw_row * config.SQ_SIZE))
+                    screen.blit(movable_indicator, board_to_screen(move.end_row, move.end_col, board_flipped))
 
 
 def highlight_last_move(screen: pg.Surface, gs: chess_engine.GameState, board_flipped: bool) -> None:
@@ -241,10 +299,5 @@ def highlight_last_move(screen: pg.Surface, gs: chess_engine.GameState, board_fl
         highlight_sq.set_alpha(100)
         highlight_sq.fill(pg.Color('yellow'))
 
-        start_r_draw = (7 - last_move.start_row) if board_flipped else last_move.start_row
-        start_c_draw = (7 - last_move.start_col) if board_flipped else last_move.start_col
-        screen.blit(highlight_sq, (start_c_draw * config.SQ_SIZE, start_r_draw * config.SQ_SIZE))
-
-        end_r_draw = (7 - last_move.end_row) if board_flipped else last_move.end_row
-        end_c_draw = (7 - last_move.end_col) if board_flipped else last_move.end_col
-        screen.blit(highlight_sq, (end_c_draw * config.SQ_SIZE, end_r_draw * config.SQ_SIZE))
+        screen.blit(highlight_sq, board_to_screen(last_move.start_row, last_move.start_col, board_flipped))
+        screen.blit(highlight_sq, board_to_screen(last_move.end_row, last_move.end_col, board_flipped))
