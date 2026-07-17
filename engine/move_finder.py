@@ -20,7 +20,7 @@ state is untouched. When running the search on a background thread, pass a
 import random
 import time
 
-from engine.chess_engine import GameState
+from engine.chess_engine import AI_PROMO_PIECES, GameState
 
 # Type alias for the lightweight move format shared with chess_engine
 MoveTuple = tuple[int, int, int, int, int]
@@ -589,7 +589,7 @@ def _mvv_lva(gs: GameState, move: MoveTuple) -> int:
 
 def _promo_piece(move_type: int) -> str:
     """Map an AI promotion move-type code (3-6) to its piece letter."""
-    return {3: 'Q', 4: 'R', 5: 'B', 6: 'N'}[move_type]
+    return AI_PROMO_PIECES[move_type]
 
 
 def _has_major_material(gs: GameState) -> bool:
@@ -654,23 +654,3 @@ def evaluate(gs: GameState) -> int:
     score -= king_table[7 - bk_row][bk_col]
 
     return score
-
-
-def score_board(gs: GameState) -> float:
-    """
-    Static evaluation wrapper kept for backward compatibility.
-
-    Positive score favors White, negative favors Black. Prefer `evaluate()`
-    in new code; this wrapper additionally maps the engine's terminal flags
-    to mate/draw scores the way the old minimax implementation expected.
-
-    Returns
-    -------
-    float
-        The calculated numerical evaluation of the board.
-    """
-    if gs.is_checkmate:
-        return -CHECKMATE_SCORE if gs.white_to_move else CHECKMATE_SCORE
-    if gs.is_stalemate:
-        return DRAW_SCORE
-    return float(evaluate(gs))

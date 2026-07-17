@@ -85,13 +85,12 @@ def test_evaluate_material_advantage():
     assert move_finder.evaluate(gs) < -500
 
 
-def test_score_board_terminal_flags(gs):
-    """Verify the backward-compatible wrapper maps mate flags to mate scores."""
-    gs.is_checkmate = True
-    gs.white_to_move = True
-    assert move_finder.score_board(gs) == -move_finder.CHECKMATE_SCORE
-    gs.white_to_move = False
-    assert move_finder.score_board(gs) == move_finder.CHECKMATE_SCORE
+def test_search_position_reports_score(gs):
+    """Verify the score-returning search agrees with find_best_move."""
+    move, score = move_finder.search_position(gs, max_depth=2, time_limit=5.0)
+    assert move is not None
+    # The symmetric start position should stay close to balanced
+    assert abs(score) < 100
 
 
 # --- UCI adapter helpers ---

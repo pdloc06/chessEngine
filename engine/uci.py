@@ -119,11 +119,10 @@ def handle_go(gs: chess_engine.GameState, tokens: list[str]) -> str:
     depth = DEFAULT_DEPTH
     movetime = DEFAULT_MOVETIME
 
-    it = iter(range(len(tokens)))
-    for i in it:
-        if tokens[i] == 'depth' and i + 1 < len(tokens):
+    for i, token in enumerate(tokens):
+        if token == 'depth' and i + 1 < len(tokens):
             depth = int(tokens[i + 1])
-        elif tokens[i] == 'movetime' and i + 1 < len(tokens):
+        elif token == 'movetime' and i + 1 < len(tokens):
             movetime = int(tokens[i + 1]) / 1000.0
         # AI_PLANNING: parse 'wtime'/'btime'/'winc'/'binc' here and derive a
         # per-move budget (e.g., remaining_time / 30 + increment). Lichess

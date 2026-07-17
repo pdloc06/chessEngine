@@ -65,6 +65,12 @@ def animate_move(
 
     if frame_count == 0: return  # Prevent error
 
+    # The square being vacated never changes during the slide, so its
+    # position and color are computed once, outside the frame loop
+    erase_x, erase_y = graphics.board_to_screen(erase_row, erase_col, board_flipped)
+    erase_square = pg.Rect(erase_x, erase_y, config.SQ_SIZE, config.SQ_SIZE)
+    erase_color = config.board_colors[(erase_row + erase_col) % 2]
+
     for frame in range(frame_count + 1):
         x = start_x + (end_x - start_x) * frame / frame_count
         y = start_y + (end_y - start_y) * frame / frame_count
@@ -73,12 +79,8 @@ def animate_move(
         graphics.draw_board(screen, coord_font, board_flipped)
         graphics.draw_pieces(screen, board, board_flipped)
 
-        erase_x, erase_y = graphics.board_to_screen(erase_row, erase_col, board_flipped)
-
         # Clear the square the piece is currently leaving
-        color = config.board_colors[(erase_row + erase_col) % 2]
-        erase_square = pg.Rect(erase_x, erase_y, config.SQ_SIZE, config.SQ_SIZE)
-        pg.draw.rect(screen, color, erase_square)
+        pg.draw.rect(screen, erase_color, erase_square)
 
         # Redraw captured piece if necessary to keep it visible until overwritten
         if not move_unmake and move.piece_captured != '--':

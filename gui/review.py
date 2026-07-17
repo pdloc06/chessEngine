@@ -14,7 +14,7 @@ import sys
 import pygame as pg
 import config
 from engine import analysis, chess_engine
-from gui import graphics
+from gui import graphics, ui
 
 # Move-list layout (mirrors the spirit of ui.draw_move_log, but with an icon
 # column squeezed in front of each move's text)
@@ -309,10 +309,7 @@ def draw_review_panel(
         )
     else:
         base, var_moves, var_worker, var_cursor = variation
-        back_rect = get_variation_back_rect()
-        pg.draw.rect(screen, config.THEME['button'], back_rect, border_radius=5)
-        back_surf = font.render('< Back to game', True, config.THEME['text'])
-        screen.blit(back_surf, back_surf.get_rect(center=back_rect.center))
+        ui.draw_button(screen, get_variation_back_rect(), '< Back to game', font, radius=5)
         _draw_move_rows(
             screen, var_moves, var_worker.tags, var_cursor - 1, font,
             REVIEW_LOG_TOP + VARIATION_BAR_HEIGHT, base
@@ -326,9 +323,7 @@ def draw_review_panel(
         (next_btn, '>'),
         (flip_btn, 'Flip Board'),
     ):
-        pg.draw.rect(screen, config.THEME['button'], btn, border_radius=5)
-        label_surf = font.render(label, True, config.THEME['text'])
-        screen.blit(label_surf, label_surf.get_rect(center=btn.center))
+        ui.draw_button(screen, btn, label, font, radius=5)
 
 
 def get_review_log_click_index(
@@ -723,15 +718,7 @@ def draw_import_menu(
         (clear_btn, 'Clear', False),
         (analyze_btn, 'Analyze', True),
     ):
-        hovered = btn.collidepoint(mouse_pos)
-        if accent:
-            btn_color = pg.Color('#77b52e') if hovered else config.THEME['accent']
-        else:
-            btn_color = config.THEME['button_hover'] if hovered else config.THEME['button']
-        pg.draw.rect(screen, btn_color, btn, border_radius=8)
-        pg.draw.rect(screen, config.THEME['border'], btn, 1, border_radius=8)
-        label_surf = font.render(label, True, config.THEME['text'])
-        screen.blit(label_surf, label_surf.get_rect(center=btn.center))
+        ui.draw_button(screen, btn, label, font, mouse_pos, accent=accent, border=True)
 
     if error:
         error_surf = font.render(error, True, pg.Color('#e06c5c'))

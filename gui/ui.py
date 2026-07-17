@@ -36,6 +36,56 @@ CLOCK_LOW_SECONDS = 20  # Below this, the ticking clock turns red
 BACK_SENTINEL = '__back__'
 
 
+def draw_button(
+    screen: pg.Surface,
+    rect: pg.Rect,
+    label: str | None,
+    font: pg.font.Font,
+    mouse_pos: tuple[int, int] | None = None,
+    accent: bool = False,
+    border: bool = False,
+    radius: int = 8,
+) -> None:
+    """
+    Draw one themed rounded button, the shared style of every screen.
+
+    Parameters
+    ----------
+    screen : pygame.Surface
+        The main display surface.
+    rect : pg.Rect
+        The button's bounding rectangle.
+    label : str or None
+        Text centered on the button; None draws only the chrome (used when
+        the caller renders custom content, like the piece-set preview).
+    font : pygame.font.Font
+        Font for the label.
+    mouse_pos : tuple of int, optional
+        Current mouse position; when given, the button lightens on hover.
+    accent : bool, optional
+        True for the highlighted call-to-action style (green).
+    border : bool, optional
+        True to outline the button (the menus do, the in-game panel doesn't).
+    radius : int, optional
+        Corner radius; menus use the default 8, panel buttons pass 5.
+
+    Returns
+    -------
+    None
+    """
+    hovered = mouse_pos is not None and rect.collidepoint(mouse_pos)
+    if accent:
+        color = pg.Color('#77b52e') if hovered else config.THEME['accent']
+    else:
+        color = config.THEME['button_hover'] if hovered else config.THEME['button']
+    pg.draw.rect(screen, color, rect, border_radius=radius)
+    if border:
+        pg.draw.rect(screen, config.THEME['border'], rect, 1, border_radius=radius)
+    if label is not None:
+        label_surf = font.render(label, True, config.THEME['text'])
+        screen.blit(label_surf, label_surf.get_rect(center=rect.center))
+
+
 def compute_captured_material(board: list[list[str]]) -> tuple[dict[str, list[str]], int]:
     """
     Work out which pieces each side has captured and who is ahead on points.
@@ -249,13 +299,7 @@ def draw_time_control_menu(
     """
     screen.fill(config.THEME['panel_bg'])
 
-    back_rect = get_back_button_rect()
-    hovered = back_rect.collidepoint(mouse_pos)
-    btn_color = config.THEME['button_hover'] if hovered else config.THEME['button']
-    pg.draw.rect(screen, btn_color, back_rect, border_radius=8)
-    pg.draw.rect(screen, config.THEME['border'], back_rect, 1, border_radius=8)
-    back_surf = button_font.render('< Back', True, config.THEME['text'])
-    screen.blit(back_surf, back_surf.get_rect(center=back_rect.center))
+    draw_button(screen, get_back_button_rect(), '< Back', button_font, mouse_pos, border=True)
 
     title_surf = title_font.render('PyCheckmate', True, config.THEME['text'])
     screen.blit(title_surf, title_surf.get_rect(center=(config.WIDTH // 2, 80)))
@@ -264,15 +308,9 @@ def draw_time_control_menu(
     screen.blit(subtitle_surf, subtitle_surf.get_rect(center=(config.WIDTH // 2, 130)))
 
     for rect, mode in get_time_control_button_rects():
-        hovered = rect.collidepoint(mouse_pos)
-        btn_color = config.THEME['button_hover'] if hovered else config.THEME['button']
-        pg.draw.rect(screen, btn_color, rect, border_radius=8)
-        pg.draw.rect(screen, config.THEME['border'], rect, 1, border_radius=8)
-
         initial_seconds, increment = config.GAME_MODES[mode]
         label = mode if initial_seconds is None else f"{mode} ({initial_seconds // 60}+{increment})"
-        text_surf = button_font.render(label, True, config.THEME['text'])
-        screen.blit(text_surf, text_surf.get_rect(center=rect.center))
+        draw_button(screen, rect, label, button_font, mouse_pos, border=True)
 
 
 def draw_main_menu(
@@ -323,21 +361,12 @@ def draw_main_menu(
         (analysis_btn, 'Game Analysis'),
     )
     for rect, label in buttons:
-        hovered = rect.collidepoint(mouse_pos)
-        btn_color = config.THEME['button_hover'] if hovered else config.THEME['button']
-        pg.draw.rect(screen, btn_color, rect, border_radius=8)
-        pg.draw.rect(screen, config.THEME['border'], rect, 1, border_radius=8)
-
-        text_surf = button_font.render(label, True, config.THEME['text'])
-        screen.blit(text_surf, text_surf.get_rect(center=rect.center))
+        draw_button(screen, rect, label, button_font, mouse_pos, border=True)
 
     # Piece-set selector: cycles through the sets found under pieces/, with
     # a live knight preview of the current set
     piece_btn = get_piece_set_button_rect()
-    hovered = piece_btn.collidepoint(mouse_pos)
-    btn_color = config.THEME['button_hover'] if hovered else config.THEME['button']
-    pg.draw.rect(screen, btn_color, piece_btn, border_radius=8)
-    pg.draw.rect(screen, config.THEME['border'], piece_btn, 1, border_radius=8)
+    draw_button(screen, piece_btn, None, button_font, mouse_pos, border=True)
 
     label_surf = button_font.render(
         f'Pieces: {config.PIECE_SET.capitalize()}', True, config.THEME['text']
@@ -597,16 +626,13 @@ def draw_move_log(
     menu_btn, review_btn, prev_btn, next_btn, restart_btn, flip_btn = \
         get_control_button_rects(show_review)
 
-    btn_color, text_color = config.THEME['button'], config.THEME['text']
     buttons = [menu_btn, prev_btn, next_btn, restart_btn, flip_btn]
     labels = ["< Main Menu", "<", ">", "Restart Game", "Flip"]
     if show_review:
         buttons.insert(1, review_btn)
         labels.insert(1, "Review Game")
     for btn, txt in zip(buttons, labels):
-        pg.draw.rect(screen, btn_color, btn, border_radius=5)
-        text_surf = font.render(txt, True, text_color)
-        screen.blit(text_surf, text_surf.get_rect(center=btn.center))
+        draw_button(screen, btn, txt, font, radius=5)
 
 
 def get_move_log_click_index(

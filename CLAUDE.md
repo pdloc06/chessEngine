@@ -32,7 +32,7 @@ Two packages and a thin root, connected by narrow contracts. `engine/` is pure s
 
 **`engine/chess_engine.py`** — all rules state. `GameState` holds the board as `list[list[str]]` of `'wP'…'bK'`/`'--'` codes, row 0 = rank 8 (Black home). There are **two parallel move pipelines**:
 
-- *UI path*: `get_valid_moves()` returns `Move` objects; the game applies them only via `gs.make_move(move)`, which maintains `move_log`, `state_log`, repetition counts, and does a full Zobrist recompute. Undo via `undo_move()`.
+- *UI path*: `get_valid_moves()` returns `Move` objects; the game applies them only via `gs.make_move(move)`, which maintains `move_log`, `state_log`, repetition counts, and does a full Zobrist recompute. Undo via `unmake_move()`.
 - *AI path* (hot loop): `get_valid_moves(for_ai=True)` returns 5-tuples `(start_row, start_col, end_row, end_col, move_type)` where type 0=normal, 1=castle, 2=en-passant, 3–6=promotion Q/R/B/N. Search executes them with `make_ai_move()`/`unmake_ai_move()`, which skip the logs, update the Zobrist key incrementally, and return a 4-tuple undo package `(captured_piece, old_enpassant, old_castle_rights, old_zobrist)`. `for_ai=True` also intentionally skips 50-move/threefold hashing — the search layer handles repetition itself via `zobrist_history`.
 
 The two paths meet at `Move.from_ai_tuple(tuple, board)` / `Move.to_ai_tuple()`: an AI result must be converted to a `Move` and applied through `gs.make_move()` so animation/move-log/undo stay in sync — never apply `make_ai_move()` to the real game state. Both `make_ai_move` and `unmake_ai_move` must keep `white_pieces`/`black_pieces` sets exact (move generation iterates those sets, not the board); `tests/test_ai_interface.py` has a random-walk regression test for this.

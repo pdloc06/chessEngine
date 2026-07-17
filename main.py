@@ -825,6 +825,15 @@ def run_game(
         if clocks is not None:
             clocks[mover_color] += increment
 
+    def commit_move(move: chess_engine.Move) -> None:
+        """Play a live move: apply it, credit the increment, clear the redo stack."""
+        nonlocal move_made
+        mover_color = gs.friendly_color
+        gs.make_move(move)
+        apply_increment(mover_color)
+        move_made = True
+        undone_moves.clear()
+
     def undo_half_moves(count: int) -> int:
         """Undo up to `count` half-moves, pushing them onto the redo stack."""
         undone = 0
@@ -908,11 +917,7 @@ def run_game(
                     # Apply the chosen promotion piece
                     if clicked_option in ['Q', 'N', 'R', 'B']:
                         promoting_move.promotion_piece = clicked_option
-                        mover_color = gs.friendly_color
-                        gs.make_move(promoting_move)
-                        apply_increment(mover_color)
-                        move_made = True
-                        undone_moves.clear()
+                        commit_move(promoting_move)
 
                     # Cancel the move if clicked 'x' or outside the menu
                     sq_selected = None
@@ -944,11 +949,7 @@ def run_game(
                                 if move.is_pawn_promotion:
                                     promoting_move = move  # Pause logic to display UI menu
                                 else:
-                                    mover_color = gs.friendly_color
-                                    gs.make_move(move)
-                                    apply_increment(mover_color)
-                                    move_made = True
-                                    undone_moves.clear()
+                                    commit_move(move)
                                     sq_selected = None
                                     player_clicks = []
                                 break
@@ -1051,11 +1052,7 @@ def run_game(
                     # Reuse the pre-generated Move so notation metadata
                     # (disambiguation) stays intact in the move log
                     matched = next((m for m in valid_moves if m == ai_move), ai_move)
-                    mover_color = gs.friendly_color
-                    gs.make_move(matched)
-                    apply_increment(mover_color)
-                    move_made = True
-                    undone_moves.clear()
+                    commit_move(matched)
 
         # Game State Updates & Animation
         if move_made:

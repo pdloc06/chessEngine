@@ -21,7 +21,7 @@ and repetition detection with O(1) hashing per move.
 import random
 from dataclasses import dataclass
 
-# --- Shared movement geometry (module-level so they are built only once) ---
+# Shared movement geometry
 ORTHOGONAL_DIRECTIONS: tuple[tuple[int, int], ...] = ((-1, 0), (1, 0), (0, -1), (0, 1))
 DIAGONAL_DIRECTIONS: tuple[tuple[int, int], ...] = ((-1, -1), (1, 1), (1, -1), (-1, 1))
 ALL_DIRECTIONS: tuple[tuple[int, int], ...] = (
@@ -38,7 +38,7 @@ KNIGHT_DELTAS: tuple[tuple[int, int], ...] = (
 AI_PROMO_PIECES: dict[int, str] = {3: 'Q', 4: 'R', 5: 'B', 6: 'N'}
 AI_PROMO_CODES: dict[str, int] = {'Q': 3, 'R': 4, 'B': 5, 'N': 6}
 
-# --- Zobrist hashing tables (seeded for reproducibility across runs) ---
+# Zobrist hashing tables
 _zobrist_rng = random.Random(20260716)
 _PIECE_CODES: tuple[str, ...] = (
     'wP', 'wN', 'wB', 'wR', 'wQ', 'wK',
@@ -415,9 +415,7 @@ class GameState:
         """Get the color character of the opposing player."""
         return 'b' if self.white_to_move else 'w'
 
-    # ------------------------------------------------------------------
     # Position hashing and FEN interoperability
-    # ------------------------------------------------------------------
     def compute_zobrist_key(self) -> int:
         """
         Compute the full Zobrist hash key of the current position from scratch.
@@ -608,9 +606,7 @@ class GameState:
             + f' {"w" if self.white_to_move else "b"} {castling} {ep} {self.halfmove_clock} {fullmove}'
         )
 
-    # ------------------------------------------------------------------
     # Legal move generation
-    # ------------------------------------------------------------------
     def get_valid_moves(self, for_ai: bool = False) -> list:
         """
         Generate all legal moves in the current position.
@@ -744,9 +740,7 @@ class GameState:
 
         return moves
 
-    # ------------------------------------------------------------------
     # Full (UI) move execution
-    # ------------------------------------------------------------------
     def make_move(self, move: 'Move', annotate: bool = True) -> None:
         """
         Execute a chess move on the board and update the game state.
@@ -779,7 +773,7 @@ class GameState:
         elif move.piece_moved == 'bK':
             self.black_king_location = (move.end_row, move.end_col)
 
-        self._update_castle_rights(move, record=True)
+        self._update_castle_rights(move)
 
         if move.move_type == Move.PROMOTION:
             promoted_piece = move.promotion_piece if move.promotion_piece else 'Q'
@@ -938,9 +932,7 @@ class GameState:
             self.white_to_move
         )
 
-    # ------------------------------------------------------------------
     # Lightweight (AI search) move execution
-    # ------------------------------------------------------------------
     def make_ai_move(
             self,
             move_tuple: tuple[int, int, int, int, int]
@@ -1175,9 +1167,7 @@ class GameState:
         self.enpassant_possible = old_enpassant
         self.zobrist_key = old_zobrist
 
-    # ------------------------------------------------------------------
     # Pseudo-legal move generation per piece
-    # ------------------------------------------------------------------
     def _get_all_possible_moves(self, for_ai: bool = False) -> list:
         """Scan active pieces and fetch logic bounds for pseudo-legal moves."""
         possible_moves: list = []
@@ -1476,59 +1466,49 @@ class GameState:
                             possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
 
     def _get_castle_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
-        """Identify available castling moves bound by legal logic and piece configurations."""
+        """
+        Identify available castling moves bound by legal logic and piece configurations.
+
+        White and Black castling differ only by home rank and piece color, so
+        both sides share one implementation: each wing needs its castling
+        right intact, the squares between king and rook empty, the rook still
+        home, and the king's path (its square plus the two it crosses) safe
+        from attack.
+        """
         if self.white_to_move:
-            if (
-                (row, col) == self.WHITE_KING_HOME_SQUARE
-                and self.white_castle_king_side
-                and self.board[7][5] == '--'
-                and self.board[7][6] == '--'
-                and self.board[7][7] == 'wR'
-            ):
-                if self._squares_safe_for_castle([(7, 4), (7, 5), (7, 6)]):
-                    if for_ai:
-                        possible_moves.append((7, 4, 7, 6, 1))
-                    else:
-                        possible_moves.append(Move.castle((7, 4), (7, 6), self.board))
-            if (
-                (row, col) == self.WHITE_KING_HOME_SQUARE
-                and self.white_castle_queen_side
-                and self.board[7][1] == '--'
-                and self.board[7][2] == '--'
-                and self.board[7][3] == '--'
-                and self.board[7][0] == 'wR'
-            ):
-                if self._squares_safe_for_castle([(7, 4), (7, 3), (7, 2)]):
-                    if for_ai:
-                        possible_moves.append((7, 4, 7, 2, 1))
-                    else:
-                        possible_moves.append(Move.castle((7, 4), (7, 2), self.board))
+            home, rook = 7, 'wR'
+            home_square = self.WHITE_KING_HOME_SQUARE
+            king_side, queen_side = self.white_castle_king_side, self.white_castle_queen_side
         else:
-            if (
-                (row, col) == self.BLACK_KING_HOME_SQUARE
-                and self.black_castle_king_side
-                and self.board[0][5] == '--'
-                and self.board[0][6] == '--'
-                and self.board[0][7] == 'bR'
-            ):
-                if self._squares_safe_for_castle([(0, 4), (0, 5), (0, 6)]):
-                    if for_ai:
-                        possible_moves.append((0, 4, 0, 6, 1))
-                    else:
-                        possible_moves.append(Move.castle((0, 4), (0, 6), self.board))
-            if (
-                (row, col) == self.BLACK_KING_HOME_SQUARE
-                and self.black_castle_queen_side
-                and self.board[0][1] == '--'
-                and self.board[0][2] == '--'
-                and self.board[0][3] == '--'
-                and self.board[0][0] == 'bR'
-            ):
-                if self._squares_safe_for_castle([(0, 4), (0, 3), (0, 2)]):
-                    if for_ai:
-                        possible_moves.append((0, 4, 0, 2, 1))
-                    else:
-                        possible_moves.append(Move.castle((0, 4), (0, 2), self.board))
+            home, rook = 0, 'bR'
+            home_square = self.BLACK_KING_HOME_SQUARE
+            king_side, queen_side = self.black_castle_king_side, self.black_castle_queen_side
+
+        if (row, col) != home_square:
+            return
+        board = self.board
+
+        if (
+            king_side
+            and board[home][5] == '--' and board[home][6] == '--'
+            and board[home][7] == rook
+            and self._squares_safe_for_castle([(home, 4), (home, 5), (home, 6)])
+        ):
+            if for_ai:
+                possible_moves.append((home, 4, home, 6, 1))
+            else:
+                possible_moves.append(Move.castle((home, 4), (home, 6), board))
+
+        if (
+            queen_side
+            and board[home][1] == '--' and board[home][2] == '--' and board[home][3] == '--'
+            and board[home][0] == rook
+            and self._squares_safe_for_castle([(home, 4), (home, 3), (home, 2)])
+        ):
+            if for_ai:
+                possible_moves.append((home, 4, home, 2, 1))
+            else:
+                possible_moves.append(Move.castle((home, 4), (home, 2), board))
 
     def _squares_safe_for_castle(self, squares: list[tuple[int, int]]) -> bool:
         """Check if castling squares are free from enemy attacks."""
@@ -1537,7 +1517,7 @@ class GameState:
                 return False
         return True
 
-    def _update_castle_rights(self, move: 'Move', record: bool = True) -> None:
+    def _update_castle_rights(self, move: 'Move') -> None:
         """Update castling privileges after kings or rooks abandon initial squares."""
         if move.piece_moved == 'wK':
             self.white_castle_king_side = False
@@ -1563,17 +1543,11 @@ class GameState:
                 if move.end_col == 0: self.black_castle_queen_side = False
                 elif move.end_col == 7: self.black_castle_king_side = False
 
-        if record:
-            self.castle_rights_log.append(
-                CastleRights(
-                    self.white_castle_king_side,
-                    self.white_castle_queen_side,
-                    self.black_castle_king_side,
-                    self.black_castle_queen_side
-                )
+        self.castle_rights_log.append(
+            CastleRights(
+                self.white_castle_king_side,
+                self.white_castle_queen_side,
+                self.black_castle_king_side,
+                self.black_castle_queen_side
             )
-
-    @staticmethod
-    def _is_on_board(row: int, col: int) -> bool:
-        """Check if a given set of coordinates resides within the 8x8 matrix constraint."""
-        return 0 <= row < 8 and 0 <= col < 8
+        )
