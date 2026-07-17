@@ -3,9 +3,9 @@ Main driver for the chess program.
 
 This module handles user input (mouse clicks and keyboard events) and
 displays the current GameState object using pygame. It manages the start
-menu (choosing a Human or Computer opponent), the game loop, the turn
-mechanism, graphics rendering, move animations, board flipping, and pawn
-promotion logic.
+menu (choosing a Human or Computer opponent, then a time control), the game
+loop, the turn mechanism, the per-player chess clocks, graphics rendering,
+move animations, board flipping, and pawn promotion logic.
 
 Turn ownership rule: Player 1 always plays the color shown at the bottom of
 the board. Flipping the board therefore also switches which color Player 1
@@ -107,6 +107,46 @@ def run_main_menu(
         clock.tick(config.MAX_FPS)
 
 
+def run_time_control_menu(
+    screen: pg.Surface,
+    clock: pg.time.Clock,
+    title_font: pg.font.Font,
+    button_font: pg.font.Font
+) -> str | None:
+    """
+    Display the time-control menu and wait for the player to pick a mode.
+
+    Parameters
+    ----------
+    screen : pygame.Surface
+        The main display surface.
+    clock : pygame.time.Clock
+        The clock object for framerate regulation.
+    title_font : pygame.font.Font
+        Large font used for the game title.
+    button_font : pygame.font.Font
+        Font used for the menu buttons.
+
+    Returns
+    -------
+    str or None
+        The chosen key into `config.GAME_MODES`, or None if the window was
+        closed.
+    """
+    while True:
+        for e in pg.event.get():
+            if e.type == pg.QUIT:
+                return None
+            if e.type == pg.MOUSEBUTTONDOWN:
+                for rect, mode in ui.get_time_control_button_rects():
+                    if rect.collidepoint(e.pos):
+                        return mode
+
+        ui.draw_time_control_menu(screen, title_font, button_font, pg.mouse.get_pos())
+        pg.display.flip()
+        clock.tick(config.MAX_FPS)
+
+
 def start_ai_search(gs: chess_engine.GameState, generation: int, holder: dict) -> None:
     """
     Launch the AI move search on a background daemon thread.
@@ -181,7 +221,8 @@ def run_game(
     move_log_font: pg.font.Font,
     coord_font: pg.font.Font,
     bar_font: pg.font.Font,
-    vs_ai: bool
+    vs_ai: bool,
+    mode_key: str
 ) -> None:
     """
     Run the main game loop: input handling, turn management, and rendering.
@@ -200,6 +241,9 @@ def run_game(
         Font for the player info bars.
     vs_ai : bool
         True when Player 2 is the AI move finder.
+    mode_key : str
+        Key into `config.GAME_MODES` picking the time control (or "No Clock"
+        to play untimed).
 
     Returns
     -------
@@ -222,6 +266,14 @@ def run_game(
     sq_selected: tuple[int, int] | None = None
     player_clicks: list[tuple[int, int]] = []
 
+    # Chess clock: None means untimed (mirrors the pre-timer behavior). The
+    # increment is added to the mover's own clock right after their move.
+    initial_time, increment = config.GAME_MODES[mode_key]
+    clocks: dict[str, float] | None = (
+        {'w': float(initial_time), 'b': float(initial_time)} if initial_time is not None else None
+    )
+    flag_fallen: str | None = None  # Color whose clock reached zero, if any
+
     # AI search state: results arrive asynchronously tagged with a generation
     # counter, so anything started before an undo/flip/restart gets discarded
     ai_thinking = False
@@ -238,6 +290,11 @@ def run_game(
         """Check whether the side to move is controlled by a human."""
         player_one_color = 'b' if board_flipped else 'w'
         return (not vs_ai) or gs.friendly_color == player_one_color
+
+    def apply_increment(mover_color: str) -> None:
+        """Credit the increment to the player who just completed a live move."""
+        if clocks is not None:
+            clocks[mover_color] += increment
 
     def undo_half_moves(count: int) -> int:
         """Undo up to `count` half-moves, pushing them onto the redo stack."""
@@ -268,6 +325,7 @@ def run_game(
         """Restore a fresh GameState and clear every interaction flag."""
         nonlocal gs, valid_moves, sq_selected, player_clicks
         nonlocal move_made, move_unmake, move_to_unmake, promoting_move, game_over
+        nonlocal clocks, flag_fallen
         invalidate_ai_search()
         gs = chess_engine.GameState()
         valid_moves = gs.get_valid_moves()
@@ -279,9 +337,26 @@ def run_game(
         promoting_move = None
         game_over = False
         undone_moves.clear()
+        clocks = {'w': float(initial_time), 'b': float(initial_time)} if initial_time is not None else None
+        flag_fallen = None
 
     while running:
+        # Ticking is measured once per frame here (rather than at the loop's
+        # end) so the elapsed time is known before anything else this frame
+        # reads the clocks
+        dt_ms = clock.tick(config.MAX_FPS)
         human_turn = is_human_turn()
+
+        # Chess-clock countdown: only the side to move loses time, and only
+        # while a game is actually in progress (not mid-promotion or over).
+        # Time spent inside animate_move's own render loop isn't charged
+        # here since it ticks the same pygame Clock itself.
+        if clocks is not None and not game_over and promoting_move is None:
+            ticking_color = gs.friendly_color
+            clocks[ticking_color] = max(0.0, clocks[ticking_color] - dt_ms / 1000)
+            if clocks[ticking_color] <= 0.0 and flag_fallen is None:
+                flag_fallen = ticking_color
+                game_over = True
 
         for e in pg.event.get():
             if e.type == pg.QUIT:
@@ -304,7 +379,9 @@ def run_game(
                     # Apply the chosen promotion piece
                     if clicked_option in ['Q', 'N', 'R', 'B']:
                         promoting_move.promotion_piece = clicked_option
+                        mover_color = gs.friendly_color
                         gs.make_move(promoting_move)
+                        apply_increment(mover_color)
                         move_made = True
                         undone_moves.clear()
 
@@ -338,7 +415,9 @@ def run_game(
                                 if move.is_pawn_promotion:
                                     promoting_move = move  # Pause logic to display UI menu
                                 else:
+                                    mover_color = gs.friendly_color
                                     gs.make_move(move)
+                                    apply_increment(mover_color)
                                     move_made = True
                                     undone_moves.clear()
                                     sq_selected = None
@@ -423,7 +502,9 @@ def run_game(
                     # Reuse the pre-generated Move so notation metadata
                     # (disambiguation) stays intact in the move log
                     matched = next((m for m in valid_moves if m == ai_move), ai_move)
+                    mover_color = gs.friendly_color
                     gs.make_move(matched)
+                    apply_increment(mover_color)
                     move_made = True
                     undone_moves.clear()
 
@@ -450,9 +531,11 @@ def run_game(
             game_over = False
 
         # Core Rendering
+        forced_result = ('0-1' if flag_fallen == 'w' else '1-0') if flag_fallen is not None else None
+
         graphics.draw_game_state(screen, gs, valid_moves, sq_selected, board_flipped, coord_font)
-        ui.draw_player_bars(screen, gs, bar_font, board_flipped, vs_ai, ai_thinking)
-        ui.draw_move_log(screen, gs, move_log_font)
+        ui.draw_player_bars(screen, gs, bar_font, board_flipped, vs_ai, ai_thinking, clocks)
+        ui.draw_move_log(screen, gs, move_log_font, forced_result)
 
         # Draw promotion UI overlay if a pawn reached the end rank
         if promoting_move is not None:
@@ -465,8 +548,9 @@ def run_game(
         elif gs.is_stalemate:
             game_over = True
             ui.stalemate_animation(screen, gs, board_flipped)
+        elif flag_fallen is not None:
+            ui.time_forfeit_banner(screen, flag_fallen)
 
-        clock.tick(config.MAX_FPS)
         pg.display.flip()
 
 
@@ -495,7 +579,9 @@ def main() -> None:
 
     vs_ai = run_main_menu(screen, clock, title_font, move_log_font)
     if vs_ai is not None:
-        run_game(screen, clock, move_log_font, coord_font, bar_font, vs_ai)
+        mode_key = run_time_control_menu(screen, clock, title_font, move_log_font)
+        if mode_key is not None:
+            run_game(screen, clock, move_log_font, coord_font, bar_font, vs_ai, mode_key)
 
     pg.quit()
 

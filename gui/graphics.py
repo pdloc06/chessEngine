@@ -90,9 +90,11 @@ def load_pieces_images(pieces_type: str = 'standard') -> None:
     for piece in pieces:
         img_path = Path('pieces') / pieces_type / f'{piece}.png'
         if img_path.exists():
-            config.IMAGES[piece] = pg.transform.smoothscale(
-                pg.image.load(img_path),
-                (config.SQ_SIZE, config.SQ_SIZE),
+            raw_image = pg.image.load(img_path)
+            config.IMAGES[piece] = pg.transform.smoothscale(raw_image, (config.SQ_SIZE, config.SQ_SIZE))
+            # A second, tiny copy for the captured-material row in the player bars
+            config.SMALL_IMAGES[piece] = pg.transform.smoothscale(
+                raw_image, (config.CAPTURED_ICON_SIZE, config.CAPTURED_ICON_SIZE)
             )
         else:
             print(f"Image not found for piece: {piece}")

@@ -16,6 +16,78 @@ LOG_TOP_PADDING = 5
 LOG_LINE_SPACING = 6
 LOG_RESERVED_BOTTOM = 120  # Safe space reserved for the control buttons
 
+# Standard chess point values (not the engine's centipawn tuning weights in
+# move_finder.PIECE_VALUES) used only to size the "+N" material lead badge
+POINT_VALUES: dict[str, int] = {'Q': 9, 'R': 5, 'B': 3, 'N': 3, 'P': 1}
+STARTING_PIECE_COUNTS: dict[str, int] = {'P': 8, 'N': 2, 'B': 2, 'R': 2, 'Q': 1}
+
+CLOCK_LOW_SECONDS = 20  # Below this, the ticking clock turns red
+
+
+def compute_captured_material(board: list[list[str]]) -> tuple[dict[str, list[str]], int]:
+    """
+    Work out which pieces each side has captured and who is ahead on points.
+
+    A piece type is "missing" from one color's set relative to the standard
+    starting count exactly when the other color has captured one — comparing
+    on-board counts avoids needing a separate capture log. Promotions are a
+    minor wrinkle (a promoted queen can push a color's queen count above the
+    start value); it's clamped at zero and reads as a harmless approximation
+    rather than a phantom capture.
+
+    Parameters
+    ----------
+    board : list of list of str
+        The 2D board array populated with piece strings.
+
+    Returns
+    -------
+    tuple
+        A tuple of (captured, material_diff): `captured` maps 'w'/'b' to the
+        list of opponent piece-type letters that color has captured (most
+        valuable first); `material_diff` is White's points minus Black's
+        (positive favors White).
+    """
+    on_board = {'w': dict.fromkeys(STARTING_PIECE_COUNTS, 0), 'b': dict.fromkeys(STARTING_PIECE_COUNTS, 0)}
+    for row in board:
+        for piece in row:
+            if piece == '--':
+                continue
+            color, kind = piece[0], piece[1]
+            if kind in on_board[color]:
+                on_board[color][kind] += 1
+
+    captured: dict[str, list[str]] = {'w': [], 'b': []}
+    for kind, start_count in STARTING_PIECE_COUNTS.items():
+        captured['w'].extend([kind] * max(0, start_count - on_board['b'][kind]))
+        captured['b'].extend([kind] * max(0, start_count - on_board['w'][kind]))
+
+    for color_captures in captured.values():
+        color_captures.sort(key=lambda k: POINT_VALUES[k], reverse=True)
+
+    white_points = sum(POINT_VALUES[k] for k in captured['w'])
+    black_points = sum(POINT_VALUES[k] for k in captured['b'])
+    return captured, white_points - black_points
+
+
+def format_clock(seconds: float) -> str:
+    """
+    Format a remaining-time value in seconds as an "M:SS" clock string.
+
+    Parameters
+    ----------
+    seconds : float
+        Remaining time in seconds (never displayed as negative).
+
+    Returns
+    -------
+    str
+        The clock text, e.g. "9:07".
+    """
+    total_seconds = max(0, int(seconds))
+    minutes, secs = divmod(total_seconds, 60)
+    return f"{minutes}:{secs:02d}"
+
 
 def get_control_button_rects() -> tuple[pg.Rect, pg.Rect, pg.Rect, pg.Rect]:
     """
@@ -54,6 +126,78 @@ def get_menu_button_rects() -> tuple[pg.Rect, pg.Rect]:
     two_players_btn.center = (center_x, first_y + btn_height + gap)
 
     return vs_ai_btn, two_players_btn
+
+
+# Top of the button list, left fixed (rather than vertically centered on the
+# full window) so it always clears the title/subtitle header above it
+TIME_CONTROL_LIST_TOP = 190
+
+
+def get_time_control_button_rects() -> list[tuple[pg.Rect, str]]:
+    """
+    Calculate the bounding rectangles for the time-control menu buttons.
+
+    Returns
+    -------
+    list of tuple
+        One (pg.Rect, mode_name) pair per entry in `config.GAME_MODES`, in
+        the same order, stacked vertically below the menu header.
+    """
+    btn_width, btn_height, gap = 280, 48, 14
+    center_x = config.WIDTH // 2
+    modes = list(config.GAME_MODES.keys())
+
+    rects = []
+    for i, mode in enumerate(modes):
+        rect = pg.Rect(0, 0, btn_width, btn_height)
+        rect.top = TIME_CONTROL_LIST_TOP + i * (btn_height + gap)
+        rect.centerx = center_x
+        rects.append((rect, mode))
+    return rects
+
+
+def draw_time_control_menu(
+    screen: pg.Surface,
+    title_font: pg.font.Font,
+    button_font: pg.font.Font,
+    mouse_pos: tuple[int, int]
+) -> None:
+    """
+    Draw the menu where the player picks a time control (or no clock at all).
+
+    Parameters
+    ----------
+    screen : pygame.Surface
+        The main display surface.
+    title_font : pygame.font.Font
+        Large font used for the game title.
+    button_font : pygame.font.Font
+        Font used for the button labels and the subtitle.
+    mouse_pos : tuple of int
+        Current mouse position, used for button hover feedback.
+
+    Returns
+    -------
+    None
+    """
+    screen.fill(config.THEME['panel_bg'])
+
+    title_surf = title_font.render('PyCheckmate', True, config.THEME['text'])
+    screen.blit(title_surf, title_surf.get_rect(center=(config.WIDTH // 2, 80)))
+
+    subtitle_surf = button_font.render('Choose a time control', True, config.THEME['text_muted'])
+    screen.blit(subtitle_surf, subtitle_surf.get_rect(center=(config.WIDTH // 2, 130)))
+
+    for rect, mode in get_time_control_button_rects():
+        hovered = rect.collidepoint(mouse_pos)
+        btn_color = config.THEME['button_hover'] if hovered else config.THEME['button']
+        pg.draw.rect(screen, btn_color, rect, border_radius=8)
+        pg.draw.rect(screen, config.THEME['border'], rect, 1, border_radius=8)
+
+        initial_seconds, increment = config.GAME_MODES[mode]
+        label = mode if initial_seconds is None else f"{mode} ({initial_seconds // 60}+{increment})"
+        text_surf = button_font.render(label, True, config.THEME['text'])
+        screen.blit(text_surf, text_surf.get_rect(center=rect.center))
 
 
 def draw_main_menu(
@@ -106,7 +250,8 @@ def draw_player_bars(
     font: pg.font.Font,
     board_flipped: bool,
     vs_ai: bool,
-    ai_thinking: bool
+    ai_thinking: bool,
+    clocks: dict[str, float] | None = None
 ) -> None:
     """
     Draw the top and bottom player info bars framing the board.
@@ -114,21 +259,27 @@ def draw_player_bars(
     Player 1 is always the bottom bar and always plays the color shown at the
     bottom of the board (White normally, Black when the board is flipped).
     The opponent occupies the top bar and is labelled "Computer" in AI mode.
+    Each bar also shows that player's captured-material row (opponent piece
+    icons, plus a "+N" badge for whoever is ahead on points) and, when a time
+    control is active, a clock box in place of the old "to move" status text.
 
     Parameters
     ----------
     screen : pygame.Surface
         The main display surface.
     gs : chess_engine.GameState
-        The current game state (used for the turn indicator).
+        The current game state (used for the turn indicator and material).
     font : pygame.font.Font
-        Font for player names and status text.
+        Font for player names, the material badge, and clock text.
     board_flipped : bool
         Flag indicating whether the board perspective is currently flipped.
     vs_ai : bool
         True when the opponent is the AI move finder.
     ai_thinking : bool
         True while the AI search is running (shows a "thinking..." status).
+    clocks : dict of str to float, optional
+        Remaining seconds keyed by 'w'/'b', or None when playing untimed. When
+        given, each bar shows a clock box instead of the "to move" text.
 
     Returns
     -------
@@ -145,6 +296,8 @@ def draw_player_bars(
         (bottom_rect, 'Player 1', player_one_color),
     )
 
+    captured, material_diff = compute_captured_material(gs.board)
+
     for rect, name, color in bars:
         is_active = gs.friendly_color == color
         bar_color = config.THEME['bar_active'] if is_active else config.THEME['bar_bg']
@@ -158,18 +311,73 @@ def draw_player_bars(
         name_surf = font.render(name, True, config.THEME['text'] if is_active else config.THEME['text_dim'])
         screen.blit(name_surf, (swatch.right + 10, rect.centery - name_surf.get_height() // 2))
 
-        # Right-aligned status: turn dot, or AI thinking indicator
-        if is_active:
+        # Material row: icons of the opponent pieces this player has
+        # captured, in the opponent's color, followed by the point lead
+        opponent_color = 'b' if color == 'w' else 'w'
+        icon_x = swatch.right + 10 + name_surf.get_width() + 14
+        icon_size = config.CAPTURED_ICON_SIZE
+        icon_y = rect.centery - icon_size // 2
+        for kind in captured[color]:
+            screen.blit(config.SMALL_IMAGES[opponent_color + kind], (icon_x, icon_y))
+            icon_x += icon_size + 2
+
+        is_leading = (material_diff > 0 and color == 'w') or (material_diff < 0 and color == 'b')
+        if is_leading:
+            lead_surf = font.render(f"+{abs(material_diff)}", True, config.THEME['accent'])
+            screen.blit(lead_surf, (icon_x + 4, rect.centery - lead_surf.get_height() // 2))
+
+        # Right-aligned: a live clock box when timed, otherwise the old
+        # turn/thinking status text
+        if clocks is not None:
+            remaining = clocks[color]
+            is_low = remaining <= CLOCK_LOW_SECONDS
+            clock_box = pg.Rect(0, 0, 64, 26)
+            clock_box.midright = (rect.right - 12, rect.centery)
+
+            if is_active and is_low:
+                box_color, text_color = config.THEME['clock_low_bg'], pg.Color('white')
+            elif is_active:
+                box_color, text_color = config.THEME['clock_active_bg'], pg.Color('#1f1d1b')
+            else:
+                box_color, text_color = config.THEME['clock_bg'], config.THEME['text_dim']
+
+            pg.draw.rect(screen, box_color, clock_box, border_radius=6)
+            time_surf = font.render(format_clock(remaining), True, text_color)
+            screen.blit(time_surf, time_surf.get_rect(center=clock_box.center))
+        elif is_active:
             status = 'thinking...' if (ai_thinking and vs_ai and name == 'Computer') else 'to move'
             status_surf = font.render(status, True, config.THEME['accent'])
             screen.blit(status_surf, (rect.right - status_surf.get_width() - 12,
                                       rect.centery - status_surf.get_height() // 2))
 
 
+def time_forfeit_banner(screen: pg.Surface, flag_fallen_color: str) -> None:
+    """
+    Render a centered banner announcing that a player's clock has run out.
+
+    Parameters
+    ----------
+    screen : pygame.Surface
+        The main display surface.
+    flag_fallen_color : str
+        The color ('w' or 'b') whose clock reached zero.
+
+    Returns
+    -------
+    None
+    """
+    loser = 'White' if flag_fallen_color == 'w' else 'Black'
+    winner = 'Black' if flag_fallen_color == 'w' else 'White'
+    center_x = config.BOARD_WIDTH // 2
+    center_y = config.BOARD_TOP + config.BOARD_HEIGHT // 2
+    draw_badge(screen, f"{loser} flags, {winner} wins", pg.Color('white'), pg.Color('black'), center_x, center_y)
+
+
 def draw_move_log(
     screen: pg.Surface,
     gs: chess_engine.GameState,
-    font: pg.font.Font
+    font: pg.font.Font,
+    forced_result: str | None = None
 ) -> None:
     """
     Draw the move log interface containing notation history and system controls.
@@ -182,6 +390,10 @@ def draw_move_log(
         The current game state instance containing the move history.
     font : pygame.font.Font
         The font object utilized for rendering the log text.
+    forced_result : str, optional
+        Pre-computed result string ("1-0"/"0-1") to show instead of checking
+        `gs.is_checkmate`/`gs.is_stalemate`, used when the game ends on a
+        clock flag rather than a rules-driven end state.
 
     Returns
     -------
@@ -255,8 +467,11 @@ def draw_move_log(
 
         text_y += item_height
 
-    # Rendering match end states (Checkmate/Stalemate)
-    if gs.is_stalemate:
+    # Rendering match end states (Checkmate/Stalemate/clock flag)
+    if forced_result is not None:
+        end_surface = font.render(forced_result, True, config.THEME['text_muted'])
+        screen.blit(end_surface, (config.BOARD_WIDTH + 15, text_y))
+    elif gs.is_stalemate:
         end_surface = font.render("1/2-1/2", True, config.THEME['text_muted'])
         screen.blit(end_surface, (config.BOARD_WIDTH + 30, text_y))
     elif gs.is_checkmate:

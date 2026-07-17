@@ -32,6 +32,17 @@ ANIMATION_FPS = 60
 AI_MAX_DEPTH = 4       # Maximum iterative-deepening depth for the move finder
 AI_TIME_LIMIT = 5.0    # Soft time limit (seconds) per AI move
 
+# Time controls offered on the pre-game menu, keyed by display name to
+# (initial_seconds, increment_seconds). `None` initial seconds means the
+# clocks are disabled entirely (the classic, untimed experience).
+GAME_MODES: dict[str, tuple[int | None, int]] = {
+    'Bullet': (60, 0),
+    'Blitz': (5 * 60, 0),
+    'Rapid': (10 * 60, 0),
+    'Classical': (30 * 60, 0),
+    'No Clock': (None, 0),
+}
+
 # When True, the AI tries to host the search in a separate UCI engine
 # process running under PyPy, whose JIT makes the pure-Python search ~2x
 # faster (see uci_client.py). Needs PyPy on PATH or installed through uv
@@ -41,6 +52,8 @@ AI_USE_UCI_ENGINE = True
 
 # Global caches
 IMAGES: dict[str, pg.Surface] = {}  # Storing chess pieces' images
+SMALL_IMAGES: dict[str, pg.Surface] = {}  # Downscaled piece images for the captured-material row
+CAPTURED_ICON_SIZE = 16
 COORD_SURFACES: dict[str, dict[str, pg.Surface]] = {'white': {}, 'grey': {}}  # Storing pre-rendered coordinate surfaces
 
 # Standard board colors
@@ -60,4 +73,7 @@ THEME: dict[str, pg.Color] = {
     'accent': pg.Color('#629924'),
     'bar_bg': pg.Color('#1f1d1b'),
     'bar_active': pg.Color('#333130'),
+    'clock_bg': pg.Color('#3c3a38'),         # Idle clock (not this player's turn)
+    'clock_active_bg': pg.Color('#e8e6e3'),  # Ticking clock, light so it reads as "live"
+    'clock_low_bg': pg.Color('#c0392b'),     # Ticking clock under 20 seconds remaining
 }
