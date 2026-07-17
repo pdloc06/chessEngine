@@ -130,14 +130,17 @@ def run_time_control_menu(
     Returns
     -------
     str or None
-        The chosen key into `config.GAME_MODES`, or None if the window was
-        closed.
+        The chosen key into `config.GAME_MODES`, `ui.BACK_SENTINEL` if the
+        player asked to return to the opponent menu, or None if the window
+        was closed.
     """
     while True:
         for e in pg.event.get():
             if e.type == pg.QUIT:
                 return None
             if e.type == pg.MOUSEBUTTONDOWN:
+                if ui.get_back_button_rect().collidepoint(e.pos):
+                    return ui.BACK_SENTINEL
                 for rect, mode in ui.get_time_control_button_rects():
                     if rect.collidepoint(e.pos):
                         return mode
@@ -577,11 +580,21 @@ def main() -> None:
     graphics.load_pieces_images()
     graphics.cache_coordinate_fonts(coord_font)
 
-    vs_ai = run_main_menu(screen, clock, title_font, move_log_font)
-    if vs_ai is not None:
+    # Loop between the opponent and time-control menus so "Back" on the
+    # second screen can return to the first instead of only quitting
+    while True:
+        vs_ai = run_main_menu(screen, clock, title_font, move_log_font)
+        if vs_ai is None:
+            break
+
         mode_key = run_time_control_menu(screen, clock, title_font, move_log_font)
-        if mode_key is not None:
-            run_game(screen, clock, move_log_font, coord_font, bar_font, vs_ai, mode_key)
+        if mode_key is None:
+            break
+        if mode_key == ui.BACK_SENTINEL:
+            continue
+
+        run_game(screen, clock, move_log_font, coord_font, bar_font, vs_ai, mode_key)
+        break
 
     pg.quit()
 
