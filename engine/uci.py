@@ -5,9 +5,9 @@ This module lets the engine talk to any UCI-compatible host: chess GUIs
 (Cute Chess, Arena, BanksiaGUI) and, most importantly, the `lichess-bot`
 bridge that connects UCI engines to the Lichess Bot API.
 
-Run it directly and type commands, or point a GUI/bridge at it:
+Run it from the project root and type commands, or point a GUI/bridge at it:
 
-    python uci.py
+    python -m engine.uci
 
 Supported commands: `uci`, `isready`, `ucinewgame`,
 `position startpos|fen <fen> [moves <uci>...]`, `go [depth N] [movetime MS]`,
@@ -20,8 +20,7 @@ time management and pondering for stronger online play.
 """
 import sys
 
-import chess_engine
-import move_finder
+from engine import chess_engine, move_finder
 
 ENGINE_NAME = 'PyCheckmate'
 ENGINE_AUTHOR = 'Lucas Pham'

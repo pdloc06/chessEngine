@@ -4,7 +4,7 @@ Client side of the UCI protocol: run the engine as a separate process.
 The GUI must stay on CPython (pygame has no PyPy wheels), but the engine
 itself is pure stdlib, so it can run inside a PyPy interpreter where the
 JIT makes the search roughly 2x faster (and more at longer time controls).
-This module spawns `uci.py` under the best interpreter it can find and
+This module spawns `engine.uci` under the best interpreter it can find and
 talks to it over the same UCI text protocol that Lichess bridges use —
 so the GUI exercises exactly the code path the bot will.
 
@@ -20,10 +20,11 @@ import subprocess
 import threading
 from pathlib import Path
 
-# The engine script lives next to this file; resolve it absolutely so the
-# subprocess works no matter what the GUI's working directory is
-PROJECT_ROOT = Path(__file__).resolve().parent
-UCI_SCRIPT = PROJECT_ROOT / 'uci.py'
+# The engine runs as `python -m engine.uci`, which needs the project root
+# (this package's parent) as working directory; resolve it absolutely so
+# the subprocess works no matter what the GUI's working directory is
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UCI_MODULE_ARGS = ['-m', 'engine.uci']
 
 # Grace period added on top of the search movetime before we declare the
 # engine unresponsive (protocol handshakes use it directly)
@@ -50,7 +51,7 @@ def resolve_engine_command() -> list[str] | None:
     """
     pypy = shutil.which('pypy3') or shutil.which('pypy')
     if pypy:
-        return [pypy, str(UCI_SCRIPT)]
+        return [pypy, *UCI_MODULE_ARGS]
 
     if shutil.which('uv'):
         try:
@@ -62,7 +63,7 @@ def resolve_engine_command() -> list[str] | None:
             return None
         path = found.stdout.strip()
         if found.returncode == 0 and path:
-            return [path, str(UCI_SCRIPT)]
+            return [path, *UCI_MODULE_ARGS]
 
     return None
 
@@ -78,7 +79,7 @@ class UciEngineClient:
     Parameters
     ----------
     command : list[str]
-        Command vector to spawn the engine (interpreter + script path).
+        Command vector to spawn the engine (interpreter + module args).
 
     Raises
     ------

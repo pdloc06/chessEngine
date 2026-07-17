@@ -6,7 +6,8 @@ including the main menu, the player info bars, the move history panel,
 control buttons, the pawn promotion menu, and endgame badges.
 """
 import pygame as pg
-import chess_engine, config
+import config
+from engine import chess_engine
 from gui import graphics
 
 # Layout constants shared by draw_move_log and get_move_log_click_index so the

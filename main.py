@@ -14,7 +14,8 @@ the board. Flipping the board therefore also switches which color Player 1
 import threading
 
 import pygame as pg
-import chess_engine, move_finder, config, uci_client
+import config
+from engine import chess_engine, move_finder, uci_client
 from gui import graphics, ui, animation
 
 # Type alias matching move_finder's lightweight move format

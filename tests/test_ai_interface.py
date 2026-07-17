@@ -5,7 +5,7 @@ moves, FEN round trips, and AI tuple <-> Move conversions.
 """
 import random
 
-from chess_engine import GameState, Move
+from engine.chess_engine import GameState, Move
 
 START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 

@@ -3,8 +3,8 @@ Quick engine benchmark: perft node throughput and a fixed-depth search.
 
 Run it under different interpreters to compare raw engine speed, e.g.:
 
-    uv run --no-project bench.py                  # project CPython
-    uv run --no-project -p pypy3.11 bench.py      # PyPy (JIT-compiled)
+    uv run --no-project python -m engine.bench                # project CPython
+    uv run --no-project -p pypy3.11 python -m engine.bench    # PyPy (JIT-compiled)
 
 Perft exercises move generation + make/unmake only; the search timing
 exercises the full AI stack (ordering, evaluation, transposition table).
@@ -13,8 +13,8 @@ Neither needs pygame, so the script runs on a bare interpreter.
 import sys
 import time
 
-from chess_engine import GameState
-import move_finder
+from engine import move_finder
+from engine.chess_engine import GameState
 
 # A quiet middlegame position gives the search more to chew on than the
 # symmetric starting position (more captures, both sides developed)

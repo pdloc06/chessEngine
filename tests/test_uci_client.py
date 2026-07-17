@@ -9,15 +9,15 @@ import sys
 
 import pytest
 
-import uci_client
-from chess_engine import GameState, Move
+from engine import uci_client
+from engine.chess_engine import GameState, Move
 
 
 @pytest.fixture(scope='module')
 def client():
     """Provide one shared engine subprocess for the whole module (spawning
     an interpreter per test would dominate the suite's runtime)."""
-    engine = uci_client.UciEngineClient([sys.executable, str(uci_client.UCI_SCRIPT)])
+    engine = uci_client.UciEngineClient([sys.executable, *uci_client.UCI_MODULE_ARGS])
     yield engine
     engine.close()
 
@@ -54,7 +54,7 @@ def test_new_game_resets_cleanly(client):
 
 def test_dead_engine_raises():
     """Verify a closed engine surfaces EngineClientError, not a hang."""
-    engine = uci_client.UciEngineClient([sys.executable, str(uci_client.UCI_SCRIPT)])
+    engine = uci_client.UciEngineClient([sys.executable, *uci_client.UCI_MODULE_ARGS])
     engine.close()
     with pytest.raises(uci_client.EngineClientError):
         engine.search_from_moves([], depth=1, movetime=1.0)
@@ -65,6 +65,5 @@ def test_resolve_engine_command_shape():
     command = uci_client.resolve_engine_command()
     assert command is None or (
         isinstance(command, list)
-        and len(command) == 2
-        and command[1] == str(uci_client.UCI_SCRIPT)
+        and command[1:] == uci_client.UCI_MODULE_ARGS
     )

@@ -2,7 +2,7 @@
 Test suite covering piece movement logic, move validity,
 and special mechanics (En Passant, Castling, Promotion).
 """
-from chess_engine import Move
+from engine.chess_engine import Move
 
 
 def test_pawn_moves(gs):
