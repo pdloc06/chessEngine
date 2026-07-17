@@ -2,7 +2,9 @@
 Test suite covering piece movement logic, move validity,
 and special mechanics (En Passant, Castling, Promotion).
 """
-from engine.chess_engine import Move
+import random
+
+from engine.chess_engine import GameState, Move
 
 
 def test_pawn_moves(gs):
@@ -133,3 +135,65 @@ def test_lose_castling_rights_on_king_move(custom_gs):
     gs.make_move(Move((7, 4), (6, 4), gs.board))  # King moves Ke2
     assert gs.white_castle_king_side is False
     assert gs.white_castle_queen_side is False
+
+# --- Captures-only generation (quiescence fast path, step 6) ---
+
+def _noisy_reference(gs):
+    """Reference implementation: filter the full legal AI move list down to
+    the "noisy" subset (captures, en passant, promotions) the way the
+    quiescence search did before the dedicated captures-only generator."""
+    board = gs.board
+    return {
+        m for m in gs.get_valid_moves(for_ai=True)
+        if board[m[2]][m[3]] != '--' or m[4] == 2 or m[4] >= 3
+    }
+
+
+def test_captures_only_matches_filter_on_kiwipete():
+    """Verify the captures-only generator agrees with filtering the full
+    move list in Kiwipete, the classic generation stress position."""
+    gs = GameState.from_fen(
+        'r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1'
+    )
+    assert set(gs.get_valid_moves(for_ai=True, captures_only=True)) == _noisy_reference(gs)
+
+
+def test_captures_only_matches_filter_along_random_walk(gs):
+    """Verify captures-only equivalence at every position of a random game.
+
+    This is the same safety-net idea as the AI-interface random walk: any
+    divergence between the two generation paths (a missed capture, a leaked
+    quiet move) surfaces as a set mismatch within a few dozen plies.
+    """
+    rng = random.Random(11)
+    for _ in range(60):
+        assert set(gs.get_valid_moves(for_ai=True, captures_only=True)) == _noisy_reference(gs)
+        moves = gs.get_valid_moves(for_ai=True)
+        if not moves:
+            break
+        gs.make_ai_move(rng.choice(moves))
+
+
+def test_captures_only_returns_all_evasions_in_check():
+    """Verify that in check the flag is ignored and every evasion comes back
+    — quiet ones included — so an empty list still reliably means mate."""
+    gs = GameState.from_fen('4k3/8/8/8/8/8/4r3/4K3 w - - 0 1')  # Re2+
+    evasions = gs.get_valid_moves(for_ai=True, captures_only=True)
+    assert set(evasions) == set(gs.get_valid_moves(for_ai=True))
+    # Kxe2 is among them, but so are the quiet king steps
+    assert any(gs.board[m[2]][m[3]] != '--' for m in evasions)
+    assert any(gs.board[m[2]][m[3]] == '--' for m in evasions)
+
+
+def test_captures_only_includes_quiet_promotions(custom_gs):
+    """Verify a promotion push (no capture involved) still counts as noisy."""
+    empty_board = [['--' for _ in range(8)] for _ in range(8)]
+    empty_board[1][0] = 'wP'  # a7, one step from promotion
+    empty_board[7][4] = 'wK'
+    empty_board[0][4] = 'bK'
+
+    gs = custom_gs(empty_board)
+    noisy = gs.get_valid_moves(for_ai=True, captures_only=True)
+    # All four promotion pieces (types 3-6), and nothing else is noisy here
+    assert {m[4] for m in noisy} == {3, 4, 5, 6}
+    assert all(m[:4] == (1, 0, 0, 0) for m in noisy)

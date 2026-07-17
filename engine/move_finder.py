@@ -25,12 +25,28 @@ from engine.chess_engine import AI_PROMO_PIECES, GameState
 # Type alias for the lightweight move format shared with chess_engine
 MoveTuple = tuple[int, int, int, int, int]
 
+# Type alias for the transposition table: zobrist_key -> (depth, flag, score,
+# best_move). Callers may hold one of these across searches (step 6: the UCI
+# adapter keeps a game-long table) and pass it to `find_best_move`.
+TTable = dict[int, tuple[int, int, int, MoveTuple | None]]
+
 # --- Evaluation constants ---
 PIECE_VALUES: dict[str, int] = {'K': 0, 'Q': 900, 'R': 500, 'B': 330, 'N': 320, 'P': 100}
 
 CHECKMATE_SCORE = 100_000
 MATE_THRESHOLD = 90_000  # Scores beyond this are "mate in N" scores
 DRAW_SCORE = 0
+
+# --- Step 6 evaluation terms (LICHESS_BOT_PLAN.md) ---
+# Two bishops cover both square colors; the pair is worth a few tenths of a
+# pawn beyond the pieces' individual values.
+BISHOP_PAIR_BONUS = 30
+# Passed-pawn bonus indexed by the pawn's row from White's perspective
+# (row 1 = one step from promotion; rows 0 and 7 can't hold a pawn).
+# Black pawns index with the mirrored row, matching the PST convention.
+PASSED_PAWN_BONUS = (0, 120, 80, 50, 30, 20, 10, 0)
+# Per-pawn bonus for pawns sheltering the king (middlegame only)
+KING_SHIELD_BONUS = 12
 
 # Piece-square tables (white's perspective, row 0 = rank 8).
 # Values follow Tomasz Michniewski's "Simplified Evaluation Function".
@@ -138,8 +154,12 @@ class SearchInfo:
         Soft limit in seconds; the search aborts the current iteration when hit.
     nodes : int
         Number of nodes visited (search statistics / time-check pacing).
-    tt : dict of int to tuple
+    tt : TTable
         Transposition table: zobrist_key -> (depth, flag, score, best_move).
+        Freshly built per search unless the caller passes a shared table in,
+        in which case results persist across searches (step 6: the UCI
+        adapter reuses one table for a whole game, so each move's search
+        starts warm from the previous moves' work).
     killers : list of list of MoveTuple
         Two killer moves (quiet beta-cutoff moves) per ply.
     history : dict of tuple to int
@@ -148,11 +168,12 @@ class SearchInfo:
         Occurrence counts of Zobrist keys along game history + search path.
     """
 
-    def __init__(self, time_limit: float, rep_counts: dict[int, int]) -> None:
+    def __init__(self, time_limit: float, rep_counts: dict[int, int],
+                 tt: TTable | None = None) -> None:
         self.start_time: float = time.perf_counter()
         self.time_limit: float = time_limit
         self.nodes: int = 0
-        self.tt: dict[int, tuple[int, int, int, MoveTuple | None]] = {}
+        self.tt: TTable = {} if tt is None else tt
         self.killers: list[list[MoveTuple]] = [[] for _ in range(64)]
         self.history: dict[tuple[int, int, int, int], int] = {}
         self.rep_counts: dict[int, int] = rep_counts
@@ -170,6 +191,7 @@ def find_best_move(
     valid_moves: list[MoveTuple] | None = None,
     max_depth: int = 4,
     time_limit: float = 5.0,
+    tt: TTable | None = None,
 ) -> MoveTuple | None:
     """
     Entry point for the AI: search the position and return the best move.
@@ -193,13 +215,17 @@ def find_best_move(
         AI_PLANNING: this parameter is the clock-management hook for Lichess
         play — uci.py derives it from the server's wtime/btime/winc fields,
         and iterative deepening guarantees a legal answer whenever it expires.
+    tt : TTable, optional
+        A transposition table to reuse and fill. Passing the same dict for
+        every move of a game lets each search start from the previous
+        searches' results (step 6). Omitted, each search builds its own.
 
     Returns
     -------
     MoveTuple or None
         The best move tuple found, or None if the position has no legal moves.
     """
-    return search_position(gs, valid_moves, max_depth, time_limit)[0]
+    return search_position(gs, valid_moves, max_depth, time_limit, tt)[0]
 
 
 def search_position(
@@ -207,6 +233,7 @@ def search_position(
     valid_moves: list[MoveTuple] | None = None,
     max_depth: int = 4,
     time_limit: float = 5.0,
+    tt: TTable | None = None,
 ) -> tuple[MoveTuple | None, int]:
     """
     Search the position and return both the best move and its score.
@@ -228,6 +255,9 @@ def search_position(
         Maximum iterative-deepening depth. Default is 4.
     time_limit : float, optional
         Soft time limit in seconds. Default is 5.0.
+    tt : TTable, optional
+        A transposition table to reuse and fill across searches (see
+        `find_best_move`). Omitted, each search builds its own.
 
     Returns
     -------
@@ -249,7 +279,7 @@ def search_position(
     for key in getattr(gs, 'zobrist_history', [gs.zobrist_key]):
         rep_counts[key] = rep_counts.get(key, 0) + 1
 
-    info = SearchInfo(time_limit, rep_counts)
+    info = SearchInfo(time_limit, rep_counts, tt)
 
     # Shuffle once so equal-scoring moves vary between games
     root_moves = list(valid_moves)
@@ -484,15 +514,16 @@ def _quiescence(gs: GameState, alpha: int, beta: int, ply: int, info: SearchInfo
     if stand_pat > alpha:
         alpha = stand_pat
 
-    moves = gs.get_valid_moves(for_ai=True)
-    if not moves:
-        return -(CHECKMATE_SCORE - ply) if gs.in_check else DRAW_SCORE
+    # Captures-only generation (step 6 of LICHESS_BOT_PLAN.md): quiet moves
+    # are never materialized, which matters because the bulk of all visited
+    # nodes are quiescence nodes. In check the generator returns the complete
+    # evasion list instead, so an empty result there is a real checkmate —
+    # while an empty captures-only list simply means the position is quiet
+    # and the stand-pat score above already bounds it.
+    noisy = gs.get_valid_moves(for_ai=True, captures_only=True)
+    if not noisy:
+        return -(CHECKMATE_SCORE - ply) if gs.in_check else alpha
 
-    board = gs.board
-    noisy = [
-        m for m in moves
-        if board[m[2]][m[3]] != '--' or m[4] == 2 or m[4] >= 3
-    ]
     noisy.sort(key=lambda m: _mvv_lva(gs, m), reverse=True)
 
     for move in noisy:
@@ -611,8 +642,12 @@ def evaluate(gs: GameState) -> int:
     """
     Static evaluation of the position from White's perspective.
 
-    Combines raw material with piece-square table bonuses. Kings switch from
-    a safety-oriented table to a centralization table once the total non-pawn
+    Combines raw material with piece-square table bonuses, plus the step 6
+    refinements: a bishop-pair bonus, passed-pawn bonuses that grow as the
+    pawn advances, a middlegame king pawn-shield bonus, and a hard zero for
+    positions where neither side has enough material to mate (so the bot
+    offers/accepts draws sensibly online). Kings switch from a
+    safety-oriented table to a centralization table once the total non-pawn
     material drops below the endgame threshold.
 
     Parameters
@@ -626,17 +661,39 @@ def evaluate(gs: GameState) -> int:
     int
         Positive scores favor White, negative favor Black (centipawns).
     """
+    # Dead-drawn material scores exactly zero. The piece-count guard keeps
+    # this from costing anything in normal positions.
+    if len(gs.white_pieces) + len(gs.black_pieces) <= 4 and _insufficient_material(gs):
+        return DRAW_SCORE
+
     board = gs.board
     score = 0
     non_pawn_material = 0
+    white_bishops = 0
+    black_bishops = 0
+    white_pawns: list[tuple[int, int]] = []
+    black_pawns: list[tuple[int, int]] = []
+    # Per-file extremes of each side's pawns, used for the passed-pawn test.
+    # Indexed by col + 1 with sentinel columns on both edges so a pawn's
+    # neighbor files never need bounds checks. A white pawn is passed when no
+    # black pawn sits ahead of it (lower row) on its own or adjacent files —
+    # i.e. the black minimum row on those files is not below the pawn's row.
+    white_max_row = [-1] * 10
+    black_min_row = [8] * 10
 
     for row, col in gs.white_pieces:
         piece_type = board[row][col][1]
         if piece_type == 'K':
             continue
         score += PIECE_VALUES[piece_type] + PST[piece_type][row][col]
-        if piece_type != 'P':
+        if piece_type == 'P':
+            white_pawns.append((row, col))
+            if row > white_max_row[col + 1]:
+                white_max_row[col + 1] = row
+        else:
             non_pawn_material += PIECE_VALUES[piece_type]
+            if piece_type == 'B':
+                white_bishops += 1
 
     for row, col in gs.black_pieces:
         piece_type = board[row][col][1]
@@ -644,13 +701,129 @@ def evaluate(gs: GameState) -> int:
             continue
         # Mirror the table vertically for Black
         score -= PIECE_VALUES[piece_type] + PST[piece_type][7 - row][col]
-        if piece_type != 'P':
+        if piece_type == 'P':
+            black_pawns.append((row, col))
+            if row < black_min_row[col + 1]:
+                black_min_row[col + 1] = row
+        else:
             non_pawn_material += PIECE_VALUES[piece_type]
+            if piece_type == 'B':
+                black_bishops += 1
 
-    king_table = KING_END_PST if non_pawn_material <= ENDGAME_MATERIAL_THRESHOLD else KING_MID_PST
+    if white_bishops >= 2:
+        score += BISHOP_PAIR_BONUS
+    if black_bishops >= 2:
+        score -= BISHOP_PAIR_BONUS
+
+    for row, col in white_pawns:
+        if (black_min_row[col] >= row
+                and black_min_row[col + 1] >= row
+                and black_min_row[col + 2] >= row):
+            score += PASSED_PAWN_BONUS[row]
+
+    for row, col in black_pawns:
+        if (white_max_row[col] <= row
+                and white_max_row[col + 1] <= row
+                and white_max_row[col + 2] <= row):
+            score -= PASSED_PAWN_BONUS[7 - row]
+
+    is_endgame = non_pawn_material <= ENDGAME_MATERIAL_THRESHOLD
+    king_table = KING_END_PST if is_endgame else KING_MID_PST
     wk_row, wk_col = gs.white_king_location
     bk_row, bk_col = gs.black_king_location
     score += king_table[wk_row][wk_col]
     score -= king_table[7 - bk_row][bk_col]
 
+    # Pawn shield: only meaningful while enough material remains to attack
+    # the king; in the endgame the king should leave its shelter anyway.
+    if not is_endgame:
+        score += KING_SHIELD_BONUS * _pawn_shield(board, wk_row, wk_col, 'wP', -1)
+        score -= KING_SHIELD_BONUS * _pawn_shield(board, bk_row, bk_col, 'bP', 1)
+
     return score
+
+
+def _pawn_shield(
+    board: list[list[str]], king_row: int, king_col: int, pawn: str, forward: int
+) -> int:
+    """
+    Count friendly pawns sheltering a castled (or home-rank) king.
+
+    Looks at the three files around the king and the two ranks directly in
+    front of it, counting at most one pawn per file — a pawn one step ahead
+    shields no better *and* no worse for our purposes than one two steps
+    ahead, but a doubled pawn must not count twice.
+
+    Parameters
+    ----------
+    board : list of list of str
+        The board grid.
+    king_row, king_col : int
+        The king's square.
+    pawn : str
+        The friendly pawn code ('wP' or 'bP').
+    forward : int
+        The direction the shield extends: -1 for White (toward row 0),
+        +1 for Black.
+
+    Returns
+    -------
+    int
+        Number of shielding pawns (0-3). Always 0 for a king that has left
+        its back two ranks — it has no shelter left to score.
+    """
+    if forward == -1 and king_row < 6:
+        return 0
+    if forward == 1 and king_row > 1:
+        return 0
+
+    count = 0
+    for col in (king_col - 1, king_col, king_col + 1):
+        if 0 <= col < 8:
+            for step in (1, 2):
+                row = king_row + forward * step
+                if 0 <= row < 8 and board[row][col] == pawn:
+                    count += 1
+                    break  # one pawn per file
+    return count
+
+
+def _insufficient_material(gs: GameState) -> bool:
+    """
+    Detect positions where neither side can possibly deliver mate.
+
+    Covers the classic dead draws: K vs K, king + single minor vs king
+    (or vs king + single minor), and KNN vs K — two knights cannot force
+    mate. Any pawn, rook, or queen on the board means mate remains possible,
+    as does a bishop pair or bishop + knight (both are forced mates).
+
+    Parameters
+    ----------
+    gs : GameState
+        The game state to inspect (callers should pre-filter on piece count;
+        with more than four pieces on the board this can never be true).
+
+    Returns
+    -------
+    bool
+        True when the material is a dead draw.
+    """
+    board = gs.board
+    white_minors: list[str] = []
+    black_minors: list[str] = []
+
+    for pieces, minors in ((gs.white_pieces, white_minors), (gs.black_pieces, black_minors)):
+        for row, col in pieces:
+            piece_type = board[row][col][1]
+            if piece_type == 'K':
+                continue
+            if piece_type in ('B', 'N'):
+                minors.append(piece_type)
+            else:
+                return False  # a pawn, rook, or queen can still deliver mate
+
+    if len(white_minors) <= 1 and len(black_minors) <= 1:
+        return True
+    # Two knights (and nothing else) cannot force mate against a bare king
+    return ((white_minors == ['N', 'N'] and not black_minors)
+            or (black_minors == ['N', 'N'] and not white_minors))

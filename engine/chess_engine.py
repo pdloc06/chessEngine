@@ -607,7 +607,7 @@ class GameState:
         )
 
     # Legal move generation
-    def get_valid_moves(self, for_ai: bool = False) -> list:
+    def get_valid_moves(self, for_ai: bool = False, captures_only: bool = False) -> list:
         """
         Generate all legal moves in the current position.
 
@@ -622,6 +622,14 @@ class GameState:
             notation metadata and draw-rule enforcement. If True, returns
             lightweight 5-element tuples and skips draw-rule hashing entirely,
             because the search layer handles repetition via Zobrist keys.
+        captures_only : bool, optional
+            If True, generate only "noisy" moves — captures, en passant, and
+            promotions — without ever materializing quiet moves. This is the
+            quiescence-search fast path (step 6 of LICHESS_BOT_PLAN.md): most
+            search nodes are quiescence nodes, and skipping quiet moves there
+            saves both the generation and the later filtering work. Ignored
+            while in check, where the complete evasion list is returned so an
+            empty result still reliably means checkmate.
 
         Returns
         -------
@@ -635,6 +643,7 @@ class GameState:
         )
 
         if self.in_check:
+            captures_only = False  # in check the caller needs every evasion (see docstring)
             if len(self.checks) == 1:  # Single check -> Block, capture, or evade
                 moves = self._get_all_possible_moves(for_ai=for_ai)
                 check = self.checks[0]
@@ -666,7 +675,7 @@ class GameState:
             else:  # Double check -> King is strictly forced to move
                 self._get_king_moves(king_row, king_col, moves, for_ai=for_ai)
         else:
-            moves = self._get_all_possible_moves(for_ai=for_ai)
+            moves = self._get_all_possible_moves(for_ai=for_ai, captures_only=captures_only)
 
         # Filter out invalid En Passant moves that expose a horizontal pin.
         # This runs before mate/stalemate evaluation so an illegal en passant
@@ -694,11 +703,15 @@ class GameState:
                     if in_check:
                         del moves[i]
 
-        # Evaluate Checkmate or Stalemate statuses
+        # Evaluate Checkmate or Stalemate statuses. Checkmate stays reliable
+        # under captures_only (in check the full evasion list was generated),
+        # but an empty captures-only list says nothing about stalemate — the
+        # quiet moves were simply never generated — so the flags are left
+        # untouched in that case.
         if len(moves) == 0:
             if self.in_check:
                 self.is_checkmate = True
-            else:
+            elif not captures_only:
                 self.is_stalemate = True
         else:
             self.is_checkmate = False
@@ -1168,7 +1181,7 @@ class GameState:
         self.zobrist_key = old_zobrist
 
     # Pseudo-legal move generation per piece
-    def _get_all_possible_moves(self, for_ai: bool = False) -> list:
+    def _get_all_possible_moves(self, for_ai: bool = False, captures_only: bool = False) -> list:
         """Scan active pieces and fetch logic bounds for pseudo-legal moves."""
         possible_moves: list = []
         active_pieces: set[tuple[int, int]] = self.white_pieces if self.white_to_move else self.black_pieces
@@ -1177,8 +1190,8 @@ class GameState:
 
         for row, col in active_pieces:
             piece = board[row][col][1]
-            move_functions[piece](row, col, possible_moves, for_ai)
-            if piece == 'K':
+            move_functions[piece](row, col, possible_moves, for_ai, captures_only)
+            if piece == 'K' and not captures_only:  # castling is never a capture
                 self._get_castle_moves(row, col, possible_moves, for_ai)
         return possible_moves
 
@@ -1307,7 +1320,10 @@ class GameState:
 
         return False
 
-    def _get_pawn_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
+    def _get_pawn_moves(
+            self, row: int, col: int, possible_moves: list,
+            for_ai: bool = False, captures_only: bool = False
+    ) -> None:
         """Get all pseudo-legal moves for a pawn at the specified location."""
         move_amount = -1 if self.white_to_move else 1
         start_row = 6 if self.white_to_move else 1
@@ -1342,7 +1358,9 @@ class GameState:
                         Move.normal((row, col), (end_row, end_col), self.board)
                     )
 
-        if self.board[row + move_amount][col] == '--':
+        # Pushes are quiet moves — except a push to the back row, which is a
+        # promotion and therefore "noisy" even for a captures-only caller
+        if self.board[row + move_amount][col] == '--' and (not captures_only or _is_back_row):
             if not piece_pinned or pin_direction == (-1, 0) or pin_direction == (1, 0):
                 _add_move(row + move_amount, col)
                 if row == start_row and self.board[row + 2 * move_amount][col] == '--':
@@ -1369,18 +1387,27 @@ class GameState:
                                 Move.en_passant((row, col), (row + move_amount, new_col), self.board)
                             )
 
-    def _get_rook_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
+    def _get_rook_moves(
+            self, row: int, col: int, possible_moves: list,
+            for_ai: bool = False, captures_only: bool = False
+    ) -> None:
         """Get all pseudo-legal moves for a rook at the specified location."""
-        self._get_sliding_moves(row, col, possible_moves, ORTHOGONAL_DIRECTIONS, for_ai)
+        self._get_sliding_moves(row, col, possible_moves, ORTHOGONAL_DIRECTIONS, for_ai, captures_only)
 
-    def _get_bishop_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
+    def _get_bishop_moves(
+            self, row: int, col: int, possible_moves: list,
+            for_ai: bool = False, captures_only: bool = False
+    ) -> None:
         """Get all pseudo-legal moves for a bishop at the specified location."""
-        self._get_sliding_moves(row, col, possible_moves, DIAGONAL_DIRECTIONS, for_ai)
+        self._get_sliding_moves(row, col, possible_moves, DIAGONAL_DIRECTIONS, for_ai, captures_only)
 
-    def _get_queen_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
+    def _get_queen_moves(
+            self, row: int, col: int, possible_moves: list,
+            for_ai: bool = False, captures_only: bool = False
+    ) -> None:
         """Get all pseudo-legal moves for a queen at the specified location."""
-        self._get_rook_moves(row, col, possible_moves, for_ai)
-        self._get_bishop_moves(row, col, possible_moves, for_ai)
+        self._get_rook_moves(row, col, possible_moves, for_ai, captures_only)
+        self._get_bishop_moves(row, col, possible_moves, for_ai, captures_only)
 
     def _get_sliding_moves(
             self,
@@ -1388,7 +1415,8 @@ class GameState:
             col: int,
             possible_moves: list,
             directions: tuple[tuple[int, int], ...],
-            for_ai: bool = False
+            for_ai: bool = False,
+            captures_only: bool = False
     ) -> None:
         """Helper method to iterate ray directions for sliding pieces (Rook, Bishop, Queen)."""
         piece_pinned = False
@@ -1413,10 +1441,13 @@ class GameState:
                 if 0 <= end_row < 8 and 0 <= end_col < 8:
                     end_piece = board[end_row][end_col]
                     if end_piece == '--':
-                        if for_ai:
-                            possible_moves.append((row, col, end_row, end_col, 0))
-                        else:
-                            possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
+                        # Quiet slide: skip the append for captures-only
+                        # callers but keep walking the ray toward a capture
+                        if not captures_only:
+                            if for_ai:
+                                possible_moves.append((row, col, end_row, end_col, 0))
+                            else:
+                                possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
                     elif end_piece[0] == enemy_color:
                         if for_ai:
                             possible_moves.append((row, col, end_row, end_col, 0))
@@ -1428,7 +1459,10 @@ class GameState:
                 else:
                     break
 
-    def _get_knight_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
+    def _get_knight_moves(
+            self, row: int, col: int, possible_moves: list,
+            for_ai: bool = False, captures_only: bool = False
+    ) -> None:
         """Get all pseudo-legal moves for a knight at the specified location."""
         # A pinned knight can never move: it cannot stay on the pin ray
         if (row, col) in self.pins:
@@ -1442,13 +1476,16 @@ class GameState:
             end_col = col + move[1]
             if 0 <= end_row < 8 and 0 <= end_col < 8:
                 end_piece = board[end_row][end_col]
-                if end_piece == '--' or end_piece[0] == enemy_color:
+                if end_piece[0] == enemy_color or (end_piece == '--' and not captures_only):
                     if for_ai:
                         possible_moves.append((row, col, end_row, end_col, 0))
                     else:
                         possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
 
-    def _get_king_moves(self, row: int, col: int, possible_moves: list, for_ai: bool = False) -> None:
+    def _get_king_moves(
+            self, row: int, col: int, possible_moves: list,
+            for_ai: bool = False, captures_only: bool = False
+    ) -> None:
         """Get all pseudo-legal normal moves for a king validating safe surrounding squares."""
         board = self.board
         enemy_color = 'b' if self.white_to_move else 'w'
@@ -1458,7 +1495,9 @@ class GameState:
             end_col = col + d[1]
             if 0 <= end_row < 8 and 0 <= end_col < 8:
                 end_piece = board[end_row][end_col]
-                if end_piece == '--' or end_piece[0] == enemy_color:
+                # The captures-only test runs before the attack scan: skipping
+                # quiet squares early also skips their _is_square_attacked cost
+                if end_piece[0] == enemy_color or (end_piece == '--' and not captures_only):
                     if not self._is_square_attacked(end_row, end_col):
                         if for_ai:
                             possible_moves.append((row, col, end_row, end_col, 0))
