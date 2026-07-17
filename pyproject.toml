@@ -1,0 +1,23 @@
+# Project metadata and dependencies, managed with uv (https://docs.astral.sh/uv/).
+# `uv sync` creates .venv and installs everything (incl. the dev group) from uv.lock.
+[project]
+name = "pycheckmate"
+version = "1.0.0"
+description = "A Pygame chess game with a from-scratch AI engine and UCI support"
+requires-python = ">=3.10"
+# The GUI needs pygame; the engine itself (chess_engine/move_finder/uci) is pure
+# stdlib. The marker skips pygame under PyPy, where the engine runs headless for
+# speed and pygame wheels are not published.
+dependencies = [
+    "pygame-ce==2.5.7; platform_python_implementation != 'PyPy'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "mypy==2.3.0; platform_python_implementation != 'PyPy'",
+]
+
+[tool.uv]
+# Pure scripts + assets, nothing to build into a wheel: manage the venv only
+package = false
