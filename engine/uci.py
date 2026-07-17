@@ -39,6 +39,15 @@ MIN_MOVE_TIME = 0.05     # seconds — always think at least a tick
 MAX_MOVE_TIME = 20.0     # seconds — cap so long clocks aren't drained early
 CLOCK_MAX_DEPTH = 64     # effectively unlimited: the clock is the real cap
 
+# Persistent transposition table (step 6 of LICHESS_BOT_PLAN.md): shared by
+# every `go` of the same game so each search starts warm from the previous
+# moves' results, and cleared on `ucinewgame`. Zobrist keys identify
+# positions absolutely, so entries stay valid as the game advances.
+transposition_table: move_finder.TTable = {}
+# Safety valve for very long games: one entry is roughly a hundred bytes, so
+# this bounds the table at a few hundred MB before it is simply rebuilt.
+TT_MAX_ENTRIES = 2_000_000
+
 
 def apply_uci_move(gs: chess_engine.GameState, uci_str: str) -> bool:
     """
@@ -199,8 +208,12 @@ def handle_go(gs: chess_engine.GameState, tokens: list[str]) -> str:
     str
         The best move in UCI notation, or '0000' when no legal move exists.
     """
+    if len(transposition_table) > TT_MAX_ENTRIES:
+        transposition_table.clear()
+
     depth, movetime = parse_go_limits(tokens, gs.white_to_move)
-    best = move_finder.find_best_move(gs, max_depth=depth, time_limit=movetime)
+    best = move_finder.find_best_move(gs, max_depth=depth, time_limit=movetime,
+                                      tt=transposition_table)
     if best is None:
         return '0000'  # UCI null move: no legal moves available
 
@@ -235,6 +248,8 @@ def main() -> None:
 
         elif command == 'ucinewgame':
             gs = chess_engine.GameState()
+            # A new game means new positions: drop the accumulated table
+            transposition_table.clear()
 
         elif command == 'position':
             try:

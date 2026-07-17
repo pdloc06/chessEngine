@@ -93,23 +93,27 @@ that Lichess sends on every `go`:
 
 In rough order of value per effort:
 
-1. **Opening book**: lichess-bot can use a polyglot `.bin` book on the bridge
-   side (zero engine work) — enable it to avoid burning clock in the opening.
+1. **Opening book** (DONE, bridge-side config only): lichess-bot reads a
+   polyglot `.bin` book — `engines/komodo.bin` from the donna_opening_books
+   repo, enabled under `engine.polyglot` in `config.yml`. Zero engine work.
 2. **Search speed**: Python is the ceiling. Cheap wins first: run under
    `pypy3` — DONE: `uv python install pypy3.11` provides the interpreter,
    `uv run --no-project -p pypy3.11 python -m engine.uci` hosts the engine under it, and
    the GUI auto-uses it through `engine/uci_client.py` (measured ~2x on `engine/bench.py`;
    the gain grows with longer time controls as the JIT stays warm). Point
-   lichess-bot's engine command at the PyPy invocation above. Next: profile
-   (`python -m cProfile -s tottime`) — `get_valid_moves` dominates; a
-   captures-only generator for quiescence is the single best structural win.
-3. **Persistent transposition table** across moves of the same game (today
-   `SearchInfo` is rebuilt per move; keep the dict on a module-level object
-   keyed by game id, clear it on `ucinewgame`).
-4. **Eval improvements**: passed-pawn bonus, king-safety pawn shield, bishop
-   pair — each is a few lines against the existing `evaluate()` loop.
-5. **Endgame draw handling**: insufficient-material detection so the bot
-   offers/accepts draws sensibly (lichess-bot has config hooks for this).
+   lichess-bot's engine command at the PyPy invocation above.
+   Captures-only quiescence generator: DONE —
+   `get_valid_moves(for_ai=True, captures_only=True)` never materializes
+   quiet moves at quiescence nodes (the bulk of the tree), roughly halving
+   search time to a fixed depth (`bench.py` depth 6: 4.9s → 2.4s CPython).
+3. **Persistent transposition table** (DONE): `find_best_move(..., tt=...)`
+   accepts a caller-held table; `engine/uci.py` keeps one per game in
+   `transposition_table`, clears it on `ucinewgame`, and caps its size.
+4. **Eval improvements** (DONE): passed-pawn bonus, king-safety pawn shield,
+   and bishop pair added to `evaluate()`.
+5. **Endgame draw handling** (DONE): `_insufficient_material` scores dead
+   material (K vs K, lone minor, KNN vs K) as an exact draw; lichess-bot's
+   `offer_draw` config hooks act on the resulting scores.
 
 ## Step 7 — Deployment
 
