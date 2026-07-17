@@ -76,16 +76,18 @@ quit
 4. Run `python lichess-bot.py -v`, then challenge your bot from your own
    account and play a game.
 
-## Step 5 — Time management (NEXT code task)
+## Step 5 — Time management (DONE: `parse_go_limits` in `engine/uci.py`)
 
-Currently `engine/uci.py` honors `go depth N` and `go movetime MS` but ignores the
-clock fields (`wtime`, `btime`, `winc`, `binc`) that Lichess sends. Implement
-in `handle_go` (marked with `AI_PLANNING`):
+`handle_go` now parses the clock fields (`wtime`, `btime`, `winc`, `binc`)
+that Lichess sends on every `go`:
 
-- budget per move ≈ `remaining_ms / 30 + increment_ms * 0.8`
-- clamp to `[0.05s, 20s]`; pass as `time_limit` to `find_best_move`
-- keep iterative deepening as the interrupt mechanism (already supported via
-  `SearchTimeout`)
+- budget per move = `remaining_ms / 30 + increment_ms * 0.8` (the side to
+  move's clock), clamped to `[0.05s, 20s]`, passed as `time_limit` to
+  `find_best_move`
+- with a clock-derived budget the depth cap is lifted (`CLOCK_MAX_DEPTH`) so
+  iterative deepening's timer (`SearchTimeout`) is what ends the search
+- explicit `go depth N` / `go movetime MS` still take precedence
+- covered by `tests/test_uci.py`
 
 ## Step 6 — Strength & robustness hardening
 
