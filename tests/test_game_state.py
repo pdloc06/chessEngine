@@ -2,7 +2,7 @@
 Test suite covering game states: Absolute Pins, Checks, Checkmates,
 Stalemates, and Draw Mechanics (50-move rule, Threefold Repetition).
 """
-from chess_engine import Move
+from engine.chess_engine import Move
 
 
 def test_absolute_pin(custom_gs):

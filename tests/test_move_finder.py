@@ -3,9 +3,9 @@ Test suite covering the AI search in move_finder: tactical correctness
 (mates, captures), state preservation, evaluation symmetry, and the
 UCI adapter helpers.
 """
-import move_finder
-import uci
-from chess_engine import GameState, Move
+from engine import move_finder
+from engine import uci
+from engine.chess_engine import GameState, Move
 
 
 # --- Search finds forced wins ---

@@ -14,11 +14,55 @@ the board. Flipping the board therefore also switches which color Player 1
 import threading
 
 import pygame as pg
-import chess_engine, move_finder, config
+import config
+from engine import chess_engine, move_finder, uci_client
 from gui import graphics, ui, animation
 
 # Type alias matching move_finder's lightweight move format
 MoveTuple = tuple[int, int, int, int, int]
+
+# Shared UCI engine subprocess (PyPy-hosted when available, see uci_client).
+# Created lazily on the first AI turn and reused for the whole session so
+# PyPy's JIT stays warm between moves. The 'failed' latch makes sure a
+# broken setup is only attempted once, not on every single AI turn.
+_engine_client: uci_client.UciEngineClient | None = None
+_engine_client_failed = False
+
+
+def _get_engine_client() -> uci_client.UciEngineClient | None:
+    """
+    Return the shared UCI engine subprocess, spawning it on first use.
+
+    Returns
+    -------
+    uci_client.UciEngineClient | None
+        A ready engine client, or None when disabled by config, no PyPy
+        interpreter exists, or a previous attempt failed (in-process
+        search is the fallback in every case).
+    """
+    global _engine_client, _engine_client_failed
+    if not config.AI_USE_UCI_ENGINE or _engine_client_failed:
+        return None
+    if _engine_client is None:
+        command = uci_client.resolve_engine_command()
+        if command is None:
+            _engine_client_failed = True
+            return None
+        try:
+            _engine_client = uci_client.UciEngineClient(command)
+        except uci_client.EngineClientError:
+            _engine_client_failed = True
+            return None
+    return _engine_client
+
+
+def _drop_engine_client() -> None:
+    """Shut down a misbehaving engine subprocess and stop using it."""
+    global _engine_client, _engine_client_failed
+    if _engine_client is not None:
+        _engine_client.close()
+        _engine_client = None
+    _engine_client_failed = True
 
 
 def run_main_menu(
@@ -91,12 +135,40 @@ def start_ai_search(gs: chess_engine.GameState, generation: int, holder: dict) -
     # (or aim for) threefold repetitions correctly
     search_gs.zobrist_history = list(gs.zobrist_history)
 
+    # Snapshot the game's move list now, on the UI thread: the engine
+    # subprocess replays it from the start position, which both sets up the
+    # position and rebuilds the repetition history on the engine's side
+    uci_moves = [move.get_uci_notation() for move in gs.move_log]
+
     def _worker() -> None:
-        best: MoveTuple | None = move_finder.find_best_move(
-            search_gs,
-            max_depth=config.AI_MAX_DEPTH,
-            time_limit=config.AI_TIME_LIMIT,
-        )
+        best: MoveTuple | None = None
+
+        # Preferred path: the persistent UCI subprocess (PyPy-hosted when
+        # available). Any protocol failure just drops us to the fallback.
+        client = _get_engine_client()
+        if client is not None:
+            try:
+                best_uci = client.search_from_moves(
+                    uci_moves, config.AI_MAX_DEPTH, config.AI_TIME_LIMIT
+                )
+                best = next(
+                    (
+                        move for move in search_gs.get_valid_moves(for_ai=True)
+                        if chess_engine.Move.from_ai_tuple(move, search_gs.board)
+                        .get_uci_notation() == best_uci
+                    ),
+                    None,
+                )
+            except uci_client.EngineClientError:
+                _drop_engine_client()
+
+        # Fallback (and the normal path without PyPy): search in-process
+        if best is None:
+            best = move_finder.find_best_move(
+                search_gs,
+                max_depth=config.AI_MAX_DEPTH,
+                time_limit=config.AI_TIME_LIMIT,
+            )
         holder['move'] = best
         holder['generation'] = generation
 

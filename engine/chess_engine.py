@@ -1297,6 +1297,9 @@ class GameState:
                         elif j == 1 and enemy_piece_type == 'P':
                             if enemy_color == 'b' and 4 <= i <= 5: return True
                             elif enemy_color == 'w' and 6 <= i <= 7: return True
+                            # A pawn that does not attack this square still
+                            # blocks the ray for any slider behind it
+                            break
                         elif j == 1 and enemy_piece_type == 'K':
                             return True
                         else:

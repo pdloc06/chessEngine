@@ -32,6 +32,13 @@ ANIMATION_FPS = 60
 AI_MAX_DEPTH = 4       # Maximum iterative-deepening depth for the move finder
 AI_TIME_LIMIT = 5.0    # Soft time limit (seconds) per AI move
 
+# When True, the AI tries to host the search in a separate UCI engine
+# process running under PyPy, whose JIT makes the pure-Python search ~2x
+# faster (see uci_client.py). Needs PyPy on PATH or installed through uv
+# (`uv python install pypy3.11`); silently falls back to the in-process
+# search when unavailable, so the game works either way.
+AI_USE_UCI_ENGINE = True
+
 # Global caches
 IMAGES: dict[str, pg.Surface] = {}  # Storing chess pieces' images
 COORD_SURFACES: dict[str, dict[str, pg.Surface]] = {'white': {}, 'grey': {}}  # Storing pre-rendered coordinate surfaces

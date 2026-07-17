@@ -5,7 +5,7 @@ moves, FEN round trips, and AI tuple <-> Move conversions.
 """
 import random
 
-from chess_engine import GameState, Move
+from engine.chess_engine import GameState, Move
 
 START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
@@ -41,6 +41,37 @@ def test_perft_initial_position(gs):
     assert perft(gs, 1) == 20
     assert perft(gs, 2) == 400
     assert perft(gs, 3) == 8902
+    assert perft(gs, 4) == 197_281
+
+
+def test_perft_kiwipete():
+    """Verify perft counts for Kiwipete, the classic edge-case stress position.
+
+    It exercises castling, pins, en passant, and promotions at once, so it
+    catches move generation bugs the quiet initial position misses.
+    """
+    gs = GameState.from_fen(
+        'r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1'
+    )
+    assert perft(gs, 1) == 48
+    assert perft(gs, 2) == 2039
+    assert perft(gs, 3) == 97_862
+
+
+def test_king_can_step_beside_blocked_enemy_pawn():
+    """Regression: a non-attacking adjacent pawn must still block the ray.
+
+    After 1. e3 d5 2. Ke2 d4 the king may play Kd3: the black pawn on d4
+    does not attack d3, and it shields d3 from the queen on d8. A missing
+    `break` in _is_square_attacked once let that ray pass through the pawn.
+    """
+    gs = GameState.from_fen('rnbqkbnr/ppp1pppp/8/8/3p4/4P3/PPPPKPPP/RNBQ1BNR w kq - 0 3')
+    king_moves = {
+        Move.from_ai_tuple(move, gs.board).get_uci_notation()
+        for move in gs.get_valid_moves(for_ai=True)
+        if gs.board[move[0]][move[1]][1] == 'K'
+    }
+    assert king_moves == {'e2d3', 'e2e1', 'e2f3'}
 
 
 def test_perft_leaves_state_untouched(gs):

@@ -20,7 +20,7 @@ state is untouched. When running the search on a background thread, pass a
 import random
 import time
 
-from chess_engine import GameState
+from engine.chess_engine import GameState
 
 # Type alias for the lightweight move format shared with chess_engine
 MoveTuple = tuple[int, int, int, int, int]

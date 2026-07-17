@@ -2,7 +2,7 @@
 Test suite covering internal engine mechanics: Piece tracking synchronization,
 Ambiguous Notation (PGN) resolution, and AI performance flags.
 """
-from chess_engine import GameState, Move
+from engine.chess_engine import GameState, Move
 
 
 # --- Helpers specific to internal mechanics ---

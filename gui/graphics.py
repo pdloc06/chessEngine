@@ -11,7 +11,8 @@ player-bar offset are handled in exactly one place.
 """
 from pathlib import Path
 import pygame as pg
-import chess_engine, config
+import config
+from engine import chess_engine
 
 
 def board_to_screen(row: int, col: int, board_flipped: bool) -> tuple[int, int]:

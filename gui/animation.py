@@ -5,7 +5,8 @@ This module provides visual feedback by animating chess pieces
 moving smoothly from their start squares to their end squares.
 """
 import pygame as pg
-import chess_engine, config
+import config
+from engine import chess_engine
 from gui import graphics
 
 
