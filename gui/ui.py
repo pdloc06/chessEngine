@@ -23,6 +23,10 @@ STARTING_PIECE_COUNTS: dict[str, int] = {'P': 8, 'N': 2, 'B': 2, 'R': 2, 'Q': 1}
 
 CLOCK_LOW_SECONDS = 20  # Below this, the ticking clock turns red
 
+# Returned by the time-control menu instead of a mode name when the player
+# clicks "Back", distinguishing "go to the previous menu" from "quit" (None)
+BACK_SENTINEL = '__back__'
+
 
 def compute_captured_material(board: list[list[str]]) -> tuple[dict[str, list[str]], int]:
     """
@@ -156,6 +160,18 @@ def get_time_control_button_rects() -> list[tuple[pg.Rect, str]]:
     return rects
 
 
+def get_back_button_rect() -> pg.Rect:
+    """
+    Calculate the bounding rectangle for the time-control menu's Back button.
+
+    Returns
+    -------
+    pg.Rect
+        The button's rect, anchored to the top-left corner of the window.
+    """
+    return pg.Rect(20, 20, 90, 34)
+
+
 def draw_time_control_menu(
     screen: pg.Surface,
     title_font: pg.font.Font,
@@ -181,6 +197,14 @@ def draw_time_control_menu(
     None
     """
     screen.fill(config.THEME['panel_bg'])
+
+    back_rect = get_back_button_rect()
+    hovered = back_rect.collidepoint(mouse_pos)
+    btn_color = config.THEME['button_hover'] if hovered else config.THEME['button']
+    pg.draw.rect(screen, btn_color, back_rect, border_radius=8)
+    pg.draw.rect(screen, config.THEME['border'], back_rect, 1, border_radius=8)
+    back_surf = button_font.render('< Back', True, config.THEME['text'])
+    screen.blit(back_surf, back_surf.get_rect(center=back_rect.center))
 
     title_surf = title_font.render('PyCheckmate', True, config.THEME['text'])
     screen.blit(title_surf, title_surf.get_rect(center=(config.WIDTH // 2, 80)))
