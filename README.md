@@ -9,9 +9,11 @@ can be read as a walkthrough of how a chess engine works.
 - Full chess rules: castling, en passant, pawn promotion (with a piece picker),
   check/checkmate/stalemate, threefold repetition, and the 50-move rule.
 - Play against another person or against the computer (chosen from the main menu).
-- AI engine: iterative-deepening negamax with alpha-beta pruning, a
-  Zobrist-keyed transposition table, quiescence search, MVV-LVA / killer /
-  history move ordering, and null-move pruning.
+- AI engine: iterative-deepening negamax with alpha-beta pruning, aspiration
+  windows, a game-long Zobrist-keyed transposition table, quiescence search with
+  static-exchange-evaluation (SEE) pruning, MVV-LVA / killer / history move
+  ordering, late move reductions, and null-move pruning. The board is stored as
+  compact integer piece codes, keeping the hot search loops free of string work.
 - Move log panel with algebraic notation and click-to-browse game history.
 - **Game review** (chess.com style): after a game ends, a **Review Game**
   button replays it with an evaluation bar, a move list where every move is

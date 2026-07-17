@@ -163,6 +163,13 @@ def run_time_control_menu(
         clock.tick(config.MAX_FPS)
 
 
+# Game-long transposition table for the in-process fallback search, so each
+# move starts warm from the previous searches' work (the same reuse the PyPy
+# UCI subprocess already gets on its own side). Reset by invalidate_ai_search()
+# on undo/flip/restart. Unused when the UCI subprocess handles the search.
+_ai_transposition_table: move_finder.TTable = {}
+
+
 def start_ai_search(gs: chess_engine.GameState, generation: int, holder: dict) -> None:
     """
     Launch the AI move search on a background daemon thread.
@@ -224,6 +231,7 @@ def start_ai_search(gs: chess_engine.GameState, generation: int, holder: dict) -
                 search_gs,
                 max_depth=config.AI_MAX_DEPTH,
                 time_limit=config.AI_TIME_LIMIT,
+                tt=_ai_transposition_table,
             )
         holder['move'] = best
         holder['generation'] = generation
@@ -814,6 +822,9 @@ def run_game(
         nonlocal ai_thinking, search_generation
         search_generation += 1
         ai_thinking = False
+        # The board changed under the fallback engine; drop its warm table so a
+        # stale line can't leak into the next search.
+        _ai_transposition_table.clear()
 
     def is_human_turn() -> bool:
         """Check whether the side to move is controlled by a human."""

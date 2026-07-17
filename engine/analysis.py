@@ -39,6 +39,9 @@ from engine.chess_engine import (
     ALL_DIRECTIONS,
     KNIGHT_DELTAS,
     GameState,
+    PIECE_TYPE,
+    EMPTY, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
+    WN, BN, BP,
 )
 from engine.move_finder import (
     CHECKMATE_SCORE,
@@ -353,17 +356,17 @@ def is_sacrifice(gs: GameState, move: MoveTuple) -> bool:
     start_row, start_col, end_row, end_col, move_type = move
     board = gs.board
     piece = board[start_row][start_col]
-    kind = piece[1]
-    if kind in ('P', 'K'):
+    kind = PIECE_TYPE[piece]
+    if kind in (PAWN, KING):
         return False
 
-    moved_value = PIECE_VALUES[kind]
+    moved_value = PIECE_VALUES[piece]
     target = board[end_row][end_col]
-    captured_value = PIECE_VALUES[target[1]] if target != '--' else 0
+    captured_value = PIECE_VALUES[target] if target != EMPTY else 0
     if moved_value - captured_value < _SACRIFICE_MARGIN:
         return False  # Trading down this little is never a real sacrifice
 
-    mover_color = piece[0]
+    mover_color = 'w' if piece < BP else 'b'
     opponent_color = 'b' if mover_color == 'w' else 'w'
 
     # Look at the destination square with the move actually played, so the
@@ -387,7 +390,7 @@ def is_sacrifice(gs: GameState, move: MoveTuple) -> bool:
 
 
 def _attacker_values(
-    board: list[list[str]],
+    board: list[list[int]],
     row: int,
     col: int,
     color: str,
@@ -414,11 +417,13 @@ def _attacker_values(
         PIECE_VALUES of each attacker, sorted ascending (kings score 0).
     """
     values: list[int] = []
+    is_white = color == 'w'
+    knight = WN if is_white else BN
 
     for d_row, d_col in KNIGHT_DELTAS:
         r, c = row + d_row, col + d_col
-        if 0 <= r < 8 and 0 <= c < 8 and board[r][c] == color + 'N':
-            values.append(PIECE_VALUES['N'])
+        if 0 <= r < 8 and 0 <= c < 8 and board[r][c] == knight:
+            values.append(PIECE_VALUES[KNIGHT])
 
     for d_row, d_col in ALL_DIRECTIONS:
         diagonal = d_row != 0 and d_col != 0
@@ -427,20 +432,20 @@ def _attacker_values(
             if not (0 <= r < 8 and 0 <= c < 8):
                 break
             piece = board[r][c]
-            if piece == '--':
+            if piece == EMPTY:
                 continue
-            if piece[0] == color:
-                kind = piece[1]
-                if kind == 'Q' or (kind == 'R' and not diagonal) or (kind == 'B' and diagonal):
-                    values.append(PIECE_VALUES[kind])
+            if (piece < BP) == is_white:
+                kind = PIECE_TYPE[piece]
+                if kind == QUEEN or (kind == ROOK and not diagonal) or (kind == BISHOP and diagonal):
+                    values.append(PIECE_VALUES[piece])
                 elif dist == 1:
-                    if kind == 'K':
-                        values.append(PIECE_VALUES['K'])
-                    elif kind == 'P' and diagonal:
+                    if kind == KING:
+                        values.append(PIECE_VALUES[piece])
+                    elif kind == PAWN and diagonal:
                         # A pawn attacks one row toward the enemy side, so a
                         # white pawn must sit one row *below* its target
-                        if (color == 'w' and d_row == 1) or (color == 'b' and d_row == -1):
-                            values.append(PIECE_VALUES['P'])
+                        if (is_white and d_row == 1) or (not is_white and d_row == -1):
+                            values.append(PIECE_VALUES[piece])
             break  # Any piece, either color, blocks the rest of the ray
         # (knight deltas handled above; nothing more on this ray)
 

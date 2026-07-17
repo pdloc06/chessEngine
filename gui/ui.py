@@ -86,7 +86,7 @@ def draw_button(
         screen.blit(label_surf, label_surf.get_rect(center=rect.center))
 
 
-def compute_captured_material(board: list[list[str]]) -> tuple[dict[str, list[str]], int]:
+def compute_captured_material(board: list[list[int]]) -> tuple[dict[str, list[str]], int]:
     """
     Work out which pieces each side has captured and who is ahead on points.
 
@@ -113,9 +113,11 @@ def compute_captured_material(board: list[list[str]]) -> tuple[dict[str, list[st
     on_board = {'w': dict.fromkeys(STARTING_PIECE_COUNTS, 0), 'b': dict.fromkeys(STARTING_PIECE_COUNTS, 0)}
     for row in board:
         for piece in row:
-            if piece == '--':
+            if piece == chess_engine.EMPTY:
                 continue
-            color, kind = piece[0], piece[1]
+            # config-facing counts are keyed by the two-char code letters
+            code = chess_engine.INT_TO_CODE[piece]
+            color, kind = code[0], code[1]
             if kind in on_board[color]:
                 on_board[color][kind] += 1
 
@@ -770,7 +772,7 @@ def draw_promotion_menu(
     -------
     None
     """
-    color = 'w' if move.piece_moved[0] == 'w' else 'b'
+    color = 'w' if move.piece_moved < chess_engine.BP else 'b'
     menu_bg_rect, shadow_rect, menu_rects = get_promotion_menu_rects(move, board_flipped)
 
     # Draw Drop Shadow (Fake blur using semi-transparent black surface)

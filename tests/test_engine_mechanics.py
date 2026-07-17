@@ -2,7 +2,7 @@
 Test suite covering internal engine mechanics: Piece tracking synchronization,
 Ambiguous Notation (PGN) resolution, and AI performance flags.
 """
-from engine.chess_engine import GameState, Move
+from engine.chess_engine import GameState, Move, EMPTY, WN, WQ, BK, BP
 
 
 # --- Helpers specific to internal mechanics ---
@@ -12,8 +12,8 @@ def get_actual_pieces(gs: GameState) -> tuple[set[tuple[int, int]], set[tuple[in
     for r in range(8):
         for c in range(8):
             piece = gs.board[r][c]
-            if piece != '--':
-                if piece[0] == 'w':
+            if piece != EMPTY:
+                if piece < BP:
                     white.add((r, c))
                 else:
                     black.add((r, c))
@@ -88,8 +88,8 @@ def test_piece_tracking_sync_en_passant(gs):
 
 def test_piece_tracking_sync_castling(gs):
     """Verify tracking sets synchronize properly during Castling."""
-    gs.board[7][5] = '--'
-    gs.board[7][6] = '--'
+    gs.board[7][5] = EMPTY
+    gs.board[7][6] = EMPTY
     gs.white_pieces.discard((7, 5))
     gs.white_pieces.discard((7, 6))
 
@@ -108,9 +108,9 @@ def test_piece_tracking_sync_castling(gs):
 def test_ambiguous_notation_different_file(empty_kings_gs):
     """Notation: Differentiate identical pieces attacking the same square by file."""
     gs = empty_kings_gs
-    gs.board[6][3] = 'wN';
+    gs.board[6][3] = WN;
     gs.white_pieces.add((6, 3))
-    gs.board[7][6] = 'wN';
+    gs.board[7][6] = WN;
     gs.white_pieces.add((7, 6))
 
     valid_moves = gs.get_valid_moves(for_ai=False)
@@ -124,9 +124,9 @@ def test_ambiguous_notation_different_file(empty_kings_gs):
 def test_ambiguous_notation_same_file(empty_kings_gs):
     """Notation: Differentiate identical pieces on the same file by rank."""
     gs = empty_kings_gs
-    gs.board[7][5] = 'wN';
+    gs.board[7][5] = WN;
     gs.white_pieces.add((7, 5))
-    gs.board[3][5] = 'wN';
+    gs.board[3][5] = WN;
     gs.white_pieces.add((3, 5))
 
     valid_moves = gs.get_valid_moves(for_ai=False)
@@ -140,11 +140,11 @@ def test_ambiguous_notation_same_file(empty_kings_gs):
 def test_ambiguous_notation_file_and_rank_overlap(empty_kings_gs):
     """Notation: Differentiate using both file and rank in complex overlaps."""
     gs = empty_kings_gs
-    gs.board[6][3] = 'wQ';
+    gs.board[6][3] = WQ;
     gs.white_pieces.add((6, 3))
-    gs.board[0][3] = 'wQ';
+    gs.board[0][3] = WQ;
     gs.white_pieces.add((0, 3))
-    gs.board[6][0] = 'wQ';
+    gs.board[6][0] = WQ;
     gs.white_pieces.add((6, 0))
 
     valid_moves = gs.get_valid_moves(for_ai=False)
@@ -160,20 +160,20 @@ def test_ambiguous_notation_file_and_rank_overlap(empty_kings_gs):
 def test_ambiguous_notation_with_capture_and_check(empty_kings_gs):
     """Notation: Ensure disambiguation meshes properly with capture/check markers."""
     gs = empty_kings_gs
-    gs.board[0][4] = '--'
+    gs.board[0][4] = EMPTY
     gs.black_pieces.remove((0, 4))
 
     # FIX: Place Black King on e5 (row 3, col 4) instead of f5.
     # A Knight on f3 (row 5, col 5) will validly check a King on e5.
-    gs.board[3][4] = 'bK'
+    gs.board[3][4] = BK
     gs.black_pieces.add((3, 4))
     gs.black_king_location = (3, 4)
 
-    gs.board[6][3] = 'wN'
+    gs.board[6][3] = WN
     gs.white_pieces.add((6, 3))
-    gs.board[7][6] = 'wN'
+    gs.board[7][6] = WN
     gs.white_pieces.add((7, 6))
-    gs.board[5][5] = 'bP'
+    gs.board[5][5] = BP
     gs.black_pieces.add((5, 5))
 
     valid_moves = gs.get_valid_moves(for_ai=False)
@@ -188,9 +188,9 @@ def test_ambiguous_notation_with_capture_and_check(empty_kings_gs):
 def test_for_ai_flag_bypasses_notation(empty_kings_gs):
     """AI Optimizer: Ensure the for_ai flag skips expensive string allocations."""
     gs = empty_kings_gs
-    gs.board[6][3] = 'wN';
+    gs.board[6][3] = WN;
     gs.white_pieces.add((6, 3))
-    gs.board[7][6] = 'wN';
+    gs.board[7][6] = WN;
     gs.white_pieces.add((7, 6))
 
     valid_moves = gs.get_valid_moves(for_ai=True)

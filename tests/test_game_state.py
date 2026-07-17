@@ -2,7 +2,7 @@
 Test suite covering game states: Absolute Pins, Checks, Checkmates,
 Stalemates, and Draw Mechanics (50-move rule, Threefold Repetition).
 """
-from engine.chess_engine import Move
+from engine.chess_engine import Move, WN, WR, BN
 
 
 def test_absolute_pin(custom_gs):
@@ -16,7 +16,7 @@ def test_absolute_pin(custom_gs):
     gs = custom_gs(empty_board)
     valid_moves = gs.get_valid_moves()
 
-    knight_moves = [m for m in valid_moves if m.piece_moved == 'wN']
+    knight_moves = [m for m in valid_moves if m.piece_moved == WN]
     assert len(knight_moves) == 0
 
 
@@ -85,8 +85,8 @@ def test_50_move_rule_resets_on_capture(empty_kings_gs):
     """Verify the 50-move clock resets to 0 upon any capture."""
     gs = empty_kings_gs
     gs.halfmove_clock = 99
-    gs.board[4][4] = 'wR'
-    gs.board[4][5] = 'bN'
+    gs.board[4][4] = WR
+    gs.board[4][5] = BN
     gs.white_pieces.add((4, 4))
     gs.black_pieces.add((4, 5))
 

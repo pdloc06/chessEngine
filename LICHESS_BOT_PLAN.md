@@ -2,8 +2,7 @@
 
 This is the roadmap for taking the engine in this repository online as a
 `BOT`-flagged account on lichess.org. Steps 1–2 are already implemented in
-code; the rest is operational work. Code locations that matter are marked
-with `AI_PLANNING` comments in the source.
+code; the rest is operational work.
 
 ---
 

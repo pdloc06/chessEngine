@@ -20,18 +20,29 @@ state is untouched. When running the search on a background thread, pass a
 import random
 import time
 
-from engine.chess_engine import AI_PROMO_PIECES, GameState
+from engine.chess_engine import (
+    AI_PROMO_PIECES, AI_PROMO_TYPE, GameState, PIECE_TYPE,
+    EMPTY, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
+    WP, WN, WB, WR, WQ, WK, BP, BN, BB, BR, BQ, BK,
+)
 
 # Type alias for the lightweight move format shared with chess_engine
 MoveTuple = tuple[int, int, int, int, int]
 
 # Type alias for the transposition table: zobrist_key -> (depth, flag, score,
-# best_move). Callers may hold one of these across searches (step 6: the UCI
-# adapter keeps a game-long table) and pass it to `find_best_move`.
-TTable = dict[int, tuple[int, int, int, MoveTuple | None]]
+# best_move, generation). Callers may hold one of these across searches (step 6:
+# the UCI adapter keeps a game-long table) and pass it to `find_best_move`. The
+# `generation` field stamps which search wrote the entry so the replacement
+# policy can evict entries left over from earlier moves (see `_negamax`).
+TTable = dict[int, tuple[int, int, int, MoveTuple | None, int]]
 
 # --- Evaluation constants ---
-PIECE_VALUES: dict[str, int] = {'K': 0, 'Q': 900, 'R': 500, 'B': 330, 'N': 320, 'P': 100}
+# Indexed by the integer piece code (1-12); both colours share a value. Index 0
+# (empty) and the kings (6, 12) are 0 so material scans can add unconditionally.
+PIECE_VALUES: tuple[int, ...] = (
+    0, 100, 320, 330, 500, 900, 0,   # empty, wP wN wB wR wQ wK
+       100, 320, 330, 500, 900, 0,   # bP bN bB bR bQ bK
+)
 
 CHECKMATE_SCORE = 100_000
 MATE_THRESHOLD = 90_000  # Scores beyond this are "mate in N" scores
@@ -51,8 +62,8 @@ KING_SHIELD_BONUS = 12
 # Piece-square tables (white's perspective, row 0 = rank 8).
 # Values follow Tomasz Michniewski's "Simplified Evaluation Function".
 # Black uses the same tables mirrored vertically (row -> 7 - row).
-PST: dict[str, tuple[tuple[int, ...], ...]] = {
-    'P': (
+PST: dict[int, tuple[tuple[int, ...], ...]] = {
+    PAWN: (
         (0, 0, 0, 0, 0, 0, 0, 0),
         (50, 50, 50, 50, 50, 50, 50, 50),
         (10, 10, 20, 30, 30, 20, 10, 10),
@@ -62,7 +73,7 @@ PST: dict[str, tuple[tuple[int, ...], ...]] = {
         (5, 10, 10, -20, -20, 10, 10, 5),
         (0, 0, 0, 0, 0, 0, 0, 0),
     ),
-    'N': (
+    KNIGHT: (
         (-50, -40, -30, -30, -30, -30, -40, -50),
         (-40, -20, 0, 0, 0, 0, -20, -40),
         (-30, 0, 10, 15, 15, 10, 0, -30),
@@ -72,7 +83,7 @@ PST: dict[str, tuple[tuple[int, ...], ...]] = {
         (-40, -20, 0, 5, 5, 0, -20, -40),
         (-50, -40, -30, -30, -30, -30, -40, -50),
     ),
-    'B': (
+    BISHOP: (
         (-20, -10, -10, -10, -10, -10, -10, -20),
         (-10, 0, 0, 0, 0, 0, 0, -10),
         (-10, 0, 5, 10, 10, 5, 0, -10),
@@ -82,7 +93,7 @@ PST: dict[str, tuple[tuple[int, ...], ...]] = {
         (-10, 5, 0, 0, 0, 0, 5, -10),
         (-20, -10, -10, -10, -10, -10, -10, -20),
     ),
-    'R': (
+    ROOK: (
         (0, 0, 0, 0, 0, 0, 0, 0),
         (5, 10, 10, 10, 10, 10, 10, 5),
         (-5, 0, 0, 0, 0, 0, 0, -5),
@@ -92,7 +103,7 @@ PST: dict[str, tuple[tuple[int, ...], ...]] = {
         (-5, 0, 0, 0, 0, 0, 0, -5),
         (0, 0, 0, 5, 5, 0, 0, 0),
     ),
-    'Q': (
+    QUEEN: (
         (-20, -10, -10, -5, -5, -10, -10, -20),
         (-10, 0, 0, 0, 0, 0, 0, -10),
         (-10, 0, 5, 5, 5, 5, 0, -10),
@@ -135,7 +146,40 @@ TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
 # Null-move pruning depth reduction
 NULL_MOVE_REDUCTION = 2
 
+# Late move reductions: quiet moves ordered past the first few are searched one
+# ply shallower with a scout window, and only re-searched at full depth if the
+# scout unexpectedly beats alpha. Conservative settings (reduce by one, only
+# after the third move, only from depth 3) so tactics are rarely missed.
+LMR_MIN_DEPTH = 3
+LMR_MIN_MOVE_INDEX = 3
+LMR_REDUCTION = 1
+
+# Aspiration windows: from this depth on, re-search around the previous
+# iteration's score inside a narrow window instead of the full one. Most
+# searches stay inside it, so alpha-beta prunes far more; the rare fail-high /
+# fail-low widens the window (doubling from DELTA) and re-searches, falling back
+# to a full window once it grows past MAX.
+ASPIRATION_MIN_DEPTH = 3
+ASPIRATION_DELTA = 50
+ASPIRATION_MAX = 1000
+
+# Static exchange evaluation (SEE): the king gets a huge notional value so the
+# swap-off never "wins" by marching the king into a defended square (which would
+# be an illegal capture). The direction tuples drive the attacker scan.
+_SEE_KING_VALUE = 10_000
+_SEE_DIAGONALS = ((-1, -1), (-1, 1), (1, -1), (1, 1))
+_SEE_ORTHOGONALS = ((-1, 0), (1, 0), (0, -1), (0, 1))
+_SEE_KNIGHT_HOPS = (
+    (-2, -1), (-2, 1), (-1, -2), (-1, 2),
+    (1, -2), (1, 2), (2, -1), (2, 1),
+)
+
 _root_rng = random.Random()
+
+# Monotonic counter stamped onto every TT entry so a game-long table can tell
+# the current search's entries from stale ones left by previous moves. Bumped
+# once per `search_position` call.
+_search_generation = 0
 
 
 class SearchTimeout(Exception):
@@ -155,11 +199,14 @@ class SearchInfo:
     nodes : int
         Number of nodes visited (search statistics / time-check pacing).
     tt : TTable
-        Transposition table: zobrist_key -> (depth, flag, score, best_move).
-        Freshly built per search unless the caller passes a shared table in,
-        in which case results persist across searches (step 6: the UCI
-        adapter reuses one table for a whole game, so each move's search
+        Transposition table: zobrist_key -> (depth, flag, score, best_move,
+        generation). Freshly built per search unless the caller passes a shared
+        table in, in which case results persist across searches (step 6: the
+        UCI adapter reuses one table for a whole game, so each move's search
         starts warm from the previous moves' work).
+    generation : int
+        This search's stamp for TT entries it writes; lets the replacement
+        policy evict entries left over from earlier moves of the game.
     killers : list of list of MoveTuple
         Two killer moves (quiet beta-cutoff moves) per ply.
     history : dict of tuple to int
@@ -169,11 +216,12 @@ class SearchInfo:
     """
 
     def __init__(self, time_limit: float, rep_counts: dict[int, int],
-                 tt: TTable | None = None) -> None:
+                 tt: TTable | None = None, generation: int = 0) -> None:
         self.start_time: float = time.perf_counter()
         self.time_limit: float = time_limit
         self.nodes: int = 0
         self.tt: TTable = {} if tt is None else tt
+        self.generation: int = generation
         self.killers: list[list[MoveTuple]] = [[] for _ in range(64)]
         self.history: dict[tuple[int, int, int, int], int] = {}
         self.rep_counts: dict[int, int] = rep_counts
@@ -211,10 +259,6 @@ def find_best_move(
         Maximum iterative-deepening depth. Default is 4.
     time_limit : float, optional
         Soft time limit in seconds. Default is 5.0.
-
-        AI_PLANNING: this parameter is the clock-management hook for Lichess
-        play — uci.py derives it from the server's wtime/btime/winc fields,
-        and iterative deepening guarantees a legal answer whenever it expires.
     tt : TTable, optional
         A transposition table to reuse and fill. Passing the same dict for
         every move of a game lets each search start from the previous
@@ -279,7 +323,9 @@ def search_position(
     for key in getattr(gs, 'zobrist_history', [gs.zobrist_key]):
         rep_counts[key] = rep_counts.get(key, 0) + 1
 
-    info = SearchInfo(time_limit, rep_counts, tt)
+    global _search_generation
+    _search_generation += 1
+    info = SearchInfo(time_limit, rep_counts, tt, _search_generation)
 
     # Shuffle once so equal-scoring moves vary between games
     root_moves = list(valid_moves)
@@ -290,7 +336,7 @@ def search_position(
 
     for depth in range(1, max_depth + 1):
         try:
-            score, move = _search_root(gs, root_moves, depth, info)
+            score, move = _aspiration_search(gs, root_moves, depth, info, best_score)
         except SearchTimeout:
             break  # Keep the result of the last completed iteration
 
@@ -312,9 +358,17 @@ def _search_root(
     root_moves: list[MoveTuple],
     depth: int,
     info: SearchInfo,
+    alpha: int,
+    beta: int,
 ) -> tuple[int, MoveTuple | None]:
     """
     Search all root moves at a fixed depth and return (score, best_move).
+
+    Fail-soft within the given window: the returned score is the true best
+    among the root moves even when it lands outside ``[alpha, beta]``. A score
+    ``<= alpha`` (fail low) or ``>= beta`` (fail high) tells the aspiration
+    driver to widen the window and re-search; ``best_move`` is still the
+    best-scoring move so the re-search searches it first.
 
     Parameters
     ----------
@@ -326,13 +380,16 @@ def _search_root(
         The nominal search depth for this iteration.
     info : SearchInfo
         Shared search bookkeeping.
+    alpha, beta : int
+        The search window. Pass the full ``[-CHECKMATE_SCORE, CHECKMATE_SCORE]``
+        for a normal (non-aspiration) iteration.
 
     Returns
     -------
     tuple
         (best_score, best_move) from the side to move's perspective.
     """
-    alpha, beta = -CHECKMATE_SCORE, CHECKMATE_SCORE
+    best_score = -CHECKMATE_SCORE
     best_move: MoveTuple | None = None
 
     for move in root_moves:
@@ -345,11 +402,68 @@ def _search_root(
             info.rep_counts[child_key] -= 1
             gs.unmake_ai_move(move, undo)
 
+        if score > best_score:
+            best_score = score
+            best_move = move
         if score > alpha:
             alpha = score
-            best_move = move
+        # Fail high: this move already beats the window, no need to look further
+        if alpha >= beta:
+            break
 
-    return alpha, best_move
+    return best_score, best_move
+
+
+def _aspiration_search(
+    gs: GameState,
+    root_moves: list[MoveTuple],
+    depth: int,
+    info: SearchInfo,
+    prev_score: int,
+) -> tuple[int, MoveTuple | None]:
+    """
+    Run one iterative-deepening iteration, narrowing the root window.
+
+    From ``ASPIRATION_MIN_DEPTH`` on, the search opens a narrow window centred
+    on the previous iteration's score. If the true score falls inside, that one
+    narrow search is far cheaper than a full-window one; if it fails high or
+    low, the window doubles and the depth is re-searched, reverting to a full
+    window once it grows past ``ASPIRATION_MAX``. Shallow depths and near-mate
+    scores skip straight to the full window (no reliable centre to bet on).
+
+    Parameters
+    ----------
+    gs : GameState
+        The game state positioned at the search root.
+    root_moves : list of MoveTuple
+        Legal root moves, best-first from the previous iteration.
+    depth : int
+        The nominal search depth for this iteration.
+    info : SearchInfo
+        Shared search bookkeeping.
+    prev_score : int
+        The score of the previous completed iteration (the window's centre).
+
+    Returns
+    -------
+    tuple
+        (best_score, best_move) from the side to move's perspective.
+    """
+    full = (-CHECKMATE_SCORE, CHECKMATE_SCORE)
+    if depth < ASPIRATION_MIN_DEPTH or abs(prev_score) >= MATE_THRESHOLD:
+        return _search_root(gs, root_moves, depth, info, *full)
+
+    window = ASPIRATION_DELTA
+    while True:
+        alpha = prev_score - window
+        beta = prev_score + window
+        score, move = _search_root(gs, root_moves, depth, info, alpha, beta)
+        if alpha < score < beta:
+            return score, move
+        # Fail high or low: widen and re-search, or give up and go full-window
+        window *= 2
+        if window > ASPIRATION_MAX:
+            return _search_root(gs, root_moves, depth, info, *full)
 
 
 def _negamax(
@@ -396,7 +510,7 @@ def _negamax(
     tt_move: MoveTuple | None = None
     entry = info.tt.get(key)
     if entry is not None:
-        tt_depth, tt_flag, tt_score, tt_move = entry
+        tt_depth, tt_flag, tt_score, tt_move, _tt_gen = entry
         if tt_depth >= depth:
             if tt_flag == TT_EXACT:
                 return tt_score
@@ -436,12 +550,32 @@ def _negamax(
     best_score = -CHECKMATE_SCORE
     best_move: MoveTuple | None = None
 
-    for move in ordered:
+    for move_index, move in enumerate(ordered):
         undo = gs.make_ai_move(move)
         child_key = gs.zobrist_key
         info.rep_counts[child_key] = info.rep_counts.get(child_key, 0) + 1
         try:
-            score = -_negamax(gs, depth - 1, -beta, -alpha, ply + 1, info)
+            # Late move reduction: a quiet move ordered late (not a capture,
+            # promotion, killer, or checking move, and not while we are in
+            # check) is unlikely to be best, so scout it a ply shallower with a
+            # null window. Only if that beats alpha do we pay for a full-depth,
+            # full-width re-search. `gs.in_check` here reflects the position
+            # *after* the move, i.e. whether the move gives check.
+            reduce = (
+                depth >= LMR_MIN_DEPTH
+                and move_index >= LMR_MIN_MOVE_INDEX
+                and not in_check
+                and not gs.in_check
+                and undo[0] == EMPTY
+                and move[4] < 3
+                and move not in info.killers[min(ply, 63)]
+            )
+            if reduce:
+                score = -_negamax(gs, depth - 1 - LMR_REDUCTION, -alpha - 1, -alpha, ply + 1, info)
+                if score > alpha:
+                    score = -_negamax(gs, depth - 1, -beta, -alpha, ply + 1, info)
+            else:
+                score = -_negamax(gs, depth - 1, -beta, -alpha, ply + 1, info)
         finally:
             info.rep_counts[child_key] -= 1
             gs.unmake_ai_move(move, undo)
@@ -455,7 +589,7 @@ def _negamax(
 
         if alpha >= beta:
             # Beta cutoff: reward quiet moves via killer/history heuristics
-            if undo[0] == '--' and move[4] < 3:
+            if undo[0] == EMPTY and move[4] < 3:
                 killers = info.killers[min(ply, 63)]
                 if move not in killers:
                     killers.insert(0, move)
@@ -473,7 +607,14 @@ def _negamax(
             flag = TT_LOWER
         else:
             flag = TT_EXACT
-        info.tt[key] = (depth, flag, best_score, best_move)
+        # Depth-preferred replacement with aging: keep a deeper result from the
+        # current search, but always overwrite an entry left by an earlier move
+        # (a stale generation) so a game-long table stays fresh rather than
+        # pinning shallow results from positions we will never revisit.
+        existing = info.tt.get(key)
+        if (existing is None or existing[4] != info.generation
+                or depth >= existing[0]):
+            info.tt[key] = (depth, flag, best_score, best_move, info.generation)
 
     return best_score
 
@@ -526,7 +667,14 @@ def _quiescence(gs: GameState, alpha: int, beta: int, ply: int, info: SearchInfo
 
     noisy.sort(key=lambda m: _mvv_lva(gs, m), reverse=True)
 
+    in_check = gs.in_check
     for move in noisy:
+        # Prune captures that lose material by static exchange: they cannot
+        # raise alpha and only cost nodes. Never prune while in check (these are
+        # forced evasions, not optional captures) or for promotions (move types
+        # >= 3), whose +queen swing SEE does not account for.
+        if not in_check and move[4] < 3 and _see(gs, move) < 0:
+            continue
         undo = gs.make_ai_move(move)
         try:
             score = -_quiescence(gs, -beta, -alpha, ply + 1, info)
@@ -581,10 +729,21 @@ def _order_moves(
         if move == tt_move:
             return 2_000_000
         victim = board[move[2]][move[3]]
-        if victim != '--' or move[4] == 2:
+        if victim != EMPTY or move[4] == 2:
+            # Winning/equal captures sort by MVV-LVA up top. For captures where
+            # the attacker outweighs the victim (a possible losing trade), pay
+            # for a SEE check and, if it really loses, drop the move below the
+            # killers so quiet moves get tried first.
+            attacker_value = PIECE_VALUES[board[move[0]][move[1]]]
+            victim_value = (PIECE_VALUES[WP] if move[4] == 2
+                            else PIECE_VALUES[victim])
+            if attacker_value > victim_value:
+                see = _see(gs, move)
+                if see < 0:
+                    return 300_000 + see
             return 1_000_000 + _mvv_lva(gs, move)
         if move[4] >= 3:  # Quiet promotions
-            return 900_000 + PIECE_VALUES[_promo_piece(move[4])]
+            return 900_000 + PIECE_VALUES[AI_PROMO_TYPE[move[4]]]
         if move in killers:
             return 800_000
         return history.get((move[0], move[1], move[2], move[3]), 0)
@@ -610,17 +769,186 @@ def _mvv_lva(gs: GameState, move: MoveTuple) -> int:
     """
     board = gs.board
     victim = board[move[2]][move[3]]
-    victim_value = PIECE_VALUES['P'] if move[4] == 2 else (
-        PIECE_VALUES[victim[1]] if victim != '--' else 0
+    victim_value = PIECE_VALUES[WP] if move[4] == 2 else (
+        PIECE_VALUES[victim] if victim != EMPTY else 0
     )
-    attacker_value = PIECE_VALUES[board[move[0]][move[1]][1]]
-    promo_bonus = PIECE_VALUES[_promo_piece(move[4])] if move[4] >= 3 else 0
+    attacker_value = PIECE_VALUES[board[move[0]][move[1]]]
+    promo_bonus = PIECE_VALUES[AI_PROMO_TYPE[move[4]]] if move[4] >= 3 else 0
     return victim_value * 10 - attacker_value + promo_bonus
 
 
 def _promo_piece(move_type: int) -> str:
     """Map an AI promotion move-type code (3-6) to its piece letter."""
     return AI_PROMO_PIECES[move_type]
+
+
+def _first_on_ray(
+    board: list[list[int]], tr: int, tc: int, dr: int, dc: int,
+    removed: set[tuple[int, int]],
+) -> tuple[int, int, int] | None:
+    """
+    Walk a ray from (tr, tc) in step (dr, dc) and return the first live piece.
+
+    Squares in ``removed`` (pieces already spent in the exchange) are treated
+    as empty, so a slider standing behind one of them is revealed — this is how
+    the SEE swap picks up X-ray attackers as the front pieces come off.
+
+    Returns
+    -------
+    tuple of (row, col, piece int) or None
+        The first occupied, non-removed square along the ray, or None if the
+        ray runs off the board without hitting one.
+    """
+    r, c = tr + dr, tc + dc
+    while 0 <= r < 8 and 0 <= c < 8:
+        if (r, c) not in removed and board[r][c] != EMPTY:
+            return r, c, board[r][c]
+        r += dr
+        c += dc
+    return None
+
+
+def _least_valuable_attacker(
+    board: list[list[int]], tr: int, tc: int, side_white: bool,
+    removed: set[tuple[int, int]],
+) -> tuple[int, tuple[int, int]] | None:
+    """
+    Find the side's cheapest piece currently attacking square (tr, tc).
+
+    Used by the SEE swap loop to decide who recaptures next. Checks piece types
+    in ascending value order (pawn, knight, bishop, rook, queen, king) so the
+    first hit is always the least valuable attacker. Squares in ``removed`` are
+    ignored, which both drops spent attackers and reveals X-ray attackers.
+
+    Parameters
+    ----------
+    side_white : bool
+        True to look for a White attacker, False for a Black one.
+
+    Returns
+    -------
+    tuple of (value, (row, col)) or None
+        The attacker's SEE value and square, or None if the side has no
+        remaining attacker on the target.
+    """
+    # Pawns: a side pawn attacks from one rank behind, on a neighbouring file.
+    # White pawns capture toward row 0, so a white attacker sits on row tr + 1.
+    pawn = WP if side_white else BP
+    pr = tr + 1 if side_white else tr - 1
+    if 0 <= pr < 8:
+        for pc in (tc - 1, tc + 1):
+            if 0 <= pc < 8 and (pr, pc) not in removed and board[pr][pc] == pawn:
+                return PIECE_VALUES[WP], (pr, pc)
+
+    # Knights: cheaper than any slider, so return as soon as one is found.
+    knight = WN if side_white else BN
+    for dr, dc in _SEE_KNIGHT_HOPS:
+        r, c = tr + dr, tc + dc
+        if 0 <= r < 8 and 0 <= c < 8 and (r, c) not in removed and board[r][c] == knight:
+            return PIECE_VALUES[WN], (r, c)
+
+    # Sliders and the king: the first live piece on each ray is the only one
+    # that can attack along it (anything behind is blocked until it is removed).
+    bishop = rook = queen = king = None
+    for dr, dc in _SEE_DIAGONALS:
+        found = _first_on_ray(board, tr, tc, dr, dc, removed)
+        if found is None or (found[2] < BP) != side_white:
+            continue
+        r, c, kind = found[0], found[1], PIECE_TYPE[found[2]]
+        if kind == BISHOP:
+            bishop = bishop or (r, c)
+        elif kind == QUEEN:
+            queen = queen or (r, c)
+        elif kind == KING and abs(r - tr) <= 1 and abs(c - tc) <= 1:
+            king = king or (r, c)
+    for dr, dc in _SEE_ORTHOGONALS:
+        found = _first_on_ray(board, tr, tc, dr, dc, removed)
+        if found is None or (found[2] < BP) != side_white:
+            continue
+        r, c, kind = found[0], found[1], PIECE_TYPE[found[2]]
+        if kind == ROOK:
+            rook = rook or (r, c)
+        elif kind == QUEEN:
+            queen = queen or (r, c)
+        elif kind == KING and abs(r - tr) <= 1 and abs(c - tc) <= 1:
+            king = king or (r, c)
+
+    if bishop is not None:
+        return PIECE_VALUES[WB], bishop
+    if rook is not None:
+        return PIECE_VALUES[WR], rook
+    if queen is not None:
+        return PIECE_VALUES[WQ], queen
+    if king is not None:
+        return _SEE_KING_VALUE, king
+    return None
+
+
+def _see(gs: GameState, move: MoveTuple) -> int:
+    """
+    Static exchange evaluation: the material a capture nets after the full swap.
+
+    Plays out the capture on the target square and every recapture by both
+    sides, always with the least valuable attacker, then minimaxes the gain
+    stack. A negative result means the capture loses material once the opponent
+    replies — the search uses that to prune and de-prioritise losing captures.
+
+    Only defined for ordinary captures and en passant (move types 0 and 2);
+    promotions are scored elsewhere and must not be passed here.
+
+    Parameters
+    ----------
+    gs : GameState
+        The game state providing the board.
+    move : MoveTuple
+        The capture to evaluate.
+
+    Returns
+    -------
+    int
+        Net material for the side to move, in centipawns (positive is good).
+    """
+    board = gs.board
+    sr, sc, er, ec, mt = move
+    mover = board[sr][sc]
+    if mt == 2:  # En passant: the captured pawn sits beside the target square
+        captured_value = PIECE_VALUES[WP]
+        removed = {(sr, sc), (sr, ec)}
+    else:
+        victim = board[er][ec]
+        if victim == EMPTY:
+            return 0  # Not a capture; SEE is undefined, treat as neutral
+        captured_value = PIECE_VALUES[victim]
+        removed = {(sr, sc)}
+
+    # gain[d] is the material the side to move at depth d stands to win if the
+    # exchange stops there; attacker_value is the piece now sitting on the
+    # target, exposed to the next recapture.
+    gain = [captured_value]
+    attacker_value = _SEE_KING_VALUE if PIECE_TYPE[mover] == KING else PIECE_VALUES[mover]
+    side_white = mover >= BP  # the opponent of the mover recaptures first
+
+    depth = 0
+    while True:
+        lva = _least_valuable_attacker(board, er, ec, side_white, removed)
+        if lva is None:
+            break
+        depth += 1
+        gain.append(attacker_value - gain[depth - 1])
+        # If the side to move can't come out ahead even in the best case, deeper
+        # recaptures can't flip the result — stop early.
+        if max(-gain[depth - 1], gain[depth]) < 0:
+            break
+        attacker_value, lva_sq = lva
+        removed.add(lva_sq)
+        side_white = not side_white
+
+    # Minimax the speculative gains back to the root: at each level the side to
+    # move only recaptures if it does not worsen their result.
+    while depth > 0:
+        gain[depth - 1] = -max(-gain[depth - 1], gain[depth])
+        depth -= 1
+    return gain[0]
 
 
 def _has_major_material(gs: GameState) -> bool:
@@ -633,7 +961,7 @@ def _has_major_material(gs: GameState) -> bool:
     board = gs.board
     pieces = gs.white_pieces if gs.white_to_move else gs.black_pieces
     for row, col in pieces:
-        if board[row][col][1] not in ('P', 'K'):
+        if PIECE_TYPE[board[row][col]] not in (PAWN, KING):
             return True
     return False
 
@@ -682,32 +1010,34 @@ def evaluate(gs: GameState) -> int:
     black_min_row = [8] * 10
 
     for row, col in gs.white_pieces:
-        piece_type = board[row][col][1]
-        if piece_type == 'K':
+        piece = board[row][col]
+        piece_type = PIECE_TYPE[piece]
+        if piece_type == KING:
             continue
-        score += PIECE_VALUES[piece_type] + PST[piece_type][row][col]
-        if piece_type == 'P':
+        score += PIECE_VALUES[piece] + PST[piece_type][row][col]
+        if piece_type == PAWN:
             white_pawns.append((row, col))
             if row > white_max_row[col + 1]:
                 white_max_row[col + 1] = row
         else:
-            non_pawn_material += PIECE_VALUES[piece_type]
-            if piece_type == 'B':
+            non_pawn_material += PIECE_VALUES[piece]
+            if piece_type == BISHOP:
                 white_bishops += 1
 
     for row, col in gs.black_pieces:
-        piece_type = board[row][col][1]
-        if piece_type == 'K':
+        piece = board[row][col]
+        piece_type = PIECE_TYPE[piece]
+        if piece_type == KING:
             continue
         # Mirror the table vertically for Black
-        score -= PIECE_VALUES[piece_type] + PST[piece_type][7 - row][col]
-        if piece_type == 'P':
+        score -= PIECE_VALUES[piece] + PST[piece_type][7 - row][col]
+        if piece_type == PAWN:
             black_pawns.append((row, col))
             if row < black_min_row[col + 1]:
                 black_min_row[col + 1] = row
         else:
-            non_pawn_material += PIECE_VALUES[piece_type]
-            if piece_type == 'B':
+            non_pawn_material += PIECE_VALUES[piece]
+            if piece_type == BISHOP:
                 black_bishops += 1
 
     if white_bishops >= 2:
@@ -737,14 +1067,14 @@ def evaluate(gs: GameState) -> int:
     # Pawn shield: only meaningful while enough material remains to attack
     # the king; in the endgame the king should leave its shelter anyway.
     if not is_endgame:
-        score += KING_SHIELD_BONUS * _pawn_shield(board, wk_row, wk_col, 'wP', -1)
-        score -= KING_SHIELD_BONUS * _pawn_shield(board, bk_row, bk_col, 'bP', 1)
+        score += KING_SHIELD_BONUS * _pawn_shield(board, wk_row, wk_col, WP, -1)
+        score -= KING_SHIELD_BONUS * _pawn_shield(board, bk_row, bk_col, BP, 1)
 
     return score
 
 
 def _pawn_shield(
-    board: list[list[str]], king_row: int, king_col: int, pawn: str, forward: int
+    board: list[list[int]], king_row: int, king_col: int, pawn: int, forward: int
 ) -> int:
     """
     Count friendly pawns sheltering a castled (or home-rank) king.
@@ -760,8 +1090,8 @@ def _pawn_shield(
         The board grid.
     king_row, king_col : int
         The king's square.
-    pawn : str
-        The friendly pawn code ('wP' or 'bP').
+    pawn : int
+        The friendly pawn code (WP or BP).
     forward : int
         The direction the shield extends: -1 for White (toward row 0),
         +1 for Black.
@@ -809,15 +1139,15 @@ def _insufficient_material(gs: GameState) -> bool:
         True when the material is a dead draw.
     """
     board = gs.board
-    white_minors: list[str] = []
-    black_minors: list[str] = []
+    white_minors: list[int] = []
+    black_minors: list[int] = []
 
     for pieces, minors in ((gs.white_pieces, white_minors), (gs.black_pieces, black_minors)):
         for row, col in pieces:
-            piece_type = board[row][col][1]
-            if piece_type == 'K':
+            piece_type = PIECE_TYPE[board[row][col]]
+            if piece_type == KING:
                 continue
-            if piece_type in ('B', 'N'):
+            if piece_type in (BISHOP, KNIGHT):
                 minors.append(piece_type)
             else:
                 return False  # a pawn, rook, or queen can still deliver mate
@@ -825,5 +1155,5 @@ def _insufficient_material(gs: GameState) -> bool:
     if len(white_minors) <= 1 and len(black_minors) <= 1:
         return True
     # Two knights (and nothing else) cannot force mate against a bare king
-    return ((white_minors == ['N', 'N'] and not black_minors)
-            or (black_minors == ['N', 'N'] and not white_minors))
+    return ((white_minors == [KNIGHT, KNIGHT] and not black_minors)
+            or (black_minors == [KNIGHT, KNIGHT] and not white_minors))

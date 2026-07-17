@@ -273,7 +273,7 @@ def draw_board(screen: pg.Surface, coord_font: pg.font.Font, board_flipped: bool
                 screen.blit(text_surf, (text_x, text_y))
 
 
-def draw_pieces(screen: pg.Surface, board: list[list[str]], board_flipped: bool) -> None:
+def draw_pieces(screen: pg.Surface, board: list[list[int]], board_flipped: bool) -> None:
     """
     Draw the chess pieces on the board according to the current game state.
 
@@ -281,8 +281,8 @@ def draw_pieces(screen: pg.Surface, board: list[list[str]], board_flipped: bool)
     ----------
     screen : pygame.Surface
         The main display surface to draw on.
-    board : list of list of str
-        The 2D board array populated with piece strings.
+    board : list of list of int
+        The 2D board array populated with integer piece codes.
     board_flipped : bool
         Flag indicating whether the board perspective is currently flipped.
 
@@ -293,9 +293,12 @@ def draw_pieces(screen: pg.Surface, board: list[list[str]], board_flipped: bool)
     for row in range(config.DIMENSION):
         for col in range(config.DIMENSION):
             piece = board[row][col]
-            if piece != '--':
+            if piece != chess_engine.EMPTY:
                 x, y = board_to_screen(row, col, board_flipped)
-                screen.blit(config.IMAGES[piece], pg.Rect(x, y, config.SQ_SIZE, config.SQ_SIZE))
+                # config.IMAGES is still keyed by the two-char code ('wP'), so
+                # convert the board int at this render boundary.
+                image = config.IMAGES[chess_engine.INT_TO_CODE[piece]]
+                screen.blit(image, pg.Rect(x, y, config.SQ_SIZE, config.SQ_SIZE))
 
 def highlight_current_square(
     screen: pg.Surface, gs: chess_engine.GameState, valid_moves: list[chess_engine.Move],
@@ -323,7 +326,8 @@ def highlight_current_square(
     """
     if sq_selected is not None:
         row, col = sq_selected
-        if gs.board[row][col][0] == gs.friendly_color:
+        piece = gs.board[row][col]
+        if piece != chess_engine.EMPTY and (piece < chess_engine.BP) == gs.white_to_move:
             current_sq = pg.Surface((config.SQ_SIZE, config.SQ_SIZE))
             current_sq.set_alpha(75)
             current_sq.fill(pg.Color('yellow'))
