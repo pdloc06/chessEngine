@@ -25,8 +25,10 @@ Exits non-zero if any game ends in an illegal move or a crash, so it doubles as
 a pre-deploy assertion.
 """
 import sys
+import time
 
 from engine.chess_engine import GameState, Move
+from engine.uci import clock_move_budget
 from engine.uci_client import (
     EngineClientError,
     UciEngineClient,
@@ -46,7 +48,8 @@ MAX_PLIES = 300
 
 
 def play_game(white: UciEngineClient, black: UciEngineClient,
-              depth: int = DEPTH, movetime: float = MOVETIME) -> tuple[str, int, str | None]:
+              depth: int = DEPTH, movetime: float = MOVETIME,
+              clock: tuple[float, float] | None = None) -> tuple[str, int, str | None]:
     """
     Play one full game between two engine clients and referee every move.
 
@@ -63,21 +66,35 @@ def play_game(white: UciEngineClient, black: UciEngineClient,
     depth : int
         Ply cap passed to each search; the clock normally stops it first.
     movetime : float
-        Per-move search budget in seconds.
+        Per-move search budget in seconds. Ignored when `clock` is given.
+    clock : tuple of (float, float), optional
+        `(base_seconds, increment_seconds)` for a *simulated game clock*.
+        The referee then budgets each move with `clock_move_budget` (the
+        same formula the UCI adapter uses online), charges the engine the
+        wall time it actually spent, credits the increment after the move,
+        and rules the game `'flagged'` the moment a side's clock runs out.
+        This is what makes time management measurable: an engine that banks
+        unused budget gets deeper searches later in the same game, and an
+        engine that overspends loses on time — exactly like on Lichess.
 
     Returns
     -------
     tuple of (str, int, str or None)
         `(result, plies, failure)`. `result` is one of ``'checkmate'``,
-        ``'draw/stalemate'``, or ``'move-cap'``. `failure` is None on a clean
-        game, or a human-readable string describing the illegal move or crash
-        that aborted it (in which case `result` is that failure's category).
+        ``'draw/stalemate'``, ``'move-cap'``, or (clock mode) ``'flagged'``.
+        For both ``'checkmate'`` and ``'flagged'`` the losing side is the
+        side to move after `plies` half-moves — even plies means White.
+        `failure` is None on a clean game, or a human-readable string
+        describing the illegal move or crash that aborted it (in which case
+        `result` is that failure's category).
     """
     white.new_game()
     black.new_game()
 
     gs = GameState()
     played: list[str] = []
+    # Simulated clocks, only meaningful in clock mode
+    remaining = [clock[0], clock[0]] if clock else [0.0, 0.0]
 
     while True:
         moves = gs.get_valid_moves()  # UI path: sets gs.in_check and folds
@@ -88,11 +105,28 @@ def play_game(white: UciEngineClient, black: UciEngineClient,
 
         engine = white if gs.white_to_move else black
         side = 'White' if gs.white_to_move else 'Black'
+        mover = 0 if gs.white_to_move else 1
+
+        if clock:
+            budget = clock_move_budget(int(remaining[mover] * 1000),
+                                       int(clock[1] * 1000))
+            started = time.monotonic()
+        else:
+            budget = movetime
 
         try:
-            uci = engine.search_from_moves(played, depth, movetime)
+            uci = engine.search_from_moves(played, depth, budget)
         except EngineClientError as exc:
             return ('crash', len(played), f'{side} engine crashed after {played}: {exc}')
+
+        if clock:
+            # Charge real wall time, credit the increment — and flag before
+            # the move is recorded, so the loser is the side to move at
+            # `plies`, same parity rule as checkmate.
+            remaining[mover] -= time.monotonic() - started
+            if remaining[mover] <= 0:
+                return ('flagged', len(played), None)
+            remaining[mover] += clock[1]
 
         legal: dict[str, Move] = {m.get_uci_notation(): m for m in moves}
         if uci not in legal:

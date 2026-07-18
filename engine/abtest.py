@@ -40,10 +40,16 @@ Run it from the repo root (PyPy is picked up automatically when installed):
     uv run --no-project python -m engine.abtest /tmp/baseline              # A = this tree, B = baseline, 100 games
     uv run --no-project python -m engine.abtest /tmp/baseline 200 0.1     # more games, faster moves
     uv run --no-project python -m engine.abtest . /tmp/baseline 100 0.2   # explicit A and B
+    uv run --no-project python -m engine.abtest /tmp/baseline 100 60+0.6  # clock mode: 60s + 0.6s/move
 
 Each positional argument that names a directory is an engine spec; the first
 one or two arguments are specs (one spec means "A is this repo"), the
-remaining arguments are ``games`` and ``movetime``.
+remaining arguments are ``games`` and a time spec. A plain number is a fixed
+per-move budget; ``base+inc`` switches on the simulated game clock (see
+`selfplay.play_game`), which is the mode that can *measure time management*:
+with a fixed movetime, banked time evaporates between moves and any
+clock-handling improvement is invisible by construction. Flagged games count
+as losses for the side that ran out, exactly like online.
 """
 import math
 import sys
@@ -114,11 +120,19 @@ def main() -> None:
     if len(specs) == 1:
         specs.insert(0, str(PROJECT_ROOT))  # A defaults to this checkout
     games = int(args[0]) if len(args) > 0 else DEFAULT_GAMES
-    movetime = float(args[1]) if len(args) > 1 else DEFAULT_MOVETIME
+    movetime = DEFAULT_MOVETIME
+    clock: tuple[float, float] | None = None
+    if len(args) > 1:
+        if '+' in args[1]:
+            base, inc = args[1].split('+', 1)
+            clock = (float(base), float(inc))
+        else:
+            movetime = float(args[1])
 
     dir_a, dir_b = specs
     print(f'A: {dir_a}\nB: {dir_b}')
-    print(f'{games} games at {movetime}s/move (depth cap {DEPTH}), colors alternate\n')
+    timing = (f'clock {clock[0]:g}s+{clock[1]:g}s' if clock else f'{movetime}s/move')
+    print(f'{games} games at {timing} (depth cap {DEPTH}), colors alternate\n')
 
     engine_a, engine_b = spawn(dir_a), spawn(dir_b)
     points_a = 0.0
@@ -127,12 +141,14 @@ def main() -> None:
         for game in range(1, games + 1):
             a_is_white = game % 2 == 1
             white, black = (engine_a, engine_b) if a_is_white else (engine_b, engine_a)
-            result, plies, failure = play_game(white, black, movetime=movetime)
+            result, plies, failure = play_game(white, black, movetime=movetime, clock=clock)
             if failure is not None:
                 sys.exit(f'game {game}: {failure}')
 
-            if result == 'checkmate':
-                white_won = plies % 2 == 1  # odd plies: Black is to move, mated
+            if result in ('checkmate', 'flagged'):
+                # Same parity rule for both: the loser is the side to move
+                # after `plies` half-moves (mated, or out of time).
+                white_won = plies % 2 == 1
                 a_won = white_won == a_is_white
                 points_a += 1.0 if a_won else 0.0
                 wins_a += a_won
