@@ -25,7 +25,7 @@ import random
 import time
 
 from engine.chess_engine import (
-    AI_PROMO_PIECES, AI_PROMO_TYPE, GameState, PIECE_TYPE,
+    AI_PROMO_TYPE, GameState, PIECE_TYPE,
     EMPTY, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
     WP, WN, WB, WR, WQ, WK, BP, BN, BB, BR, BQ, BK,
     ALL_DIRECTIONS, DIAGONAL_DIRECTIONS, KNIGHT_DELTAS, ORTHOGONAL_DIRECTIONS,
@@ -814,7 +814,7 @@ def _negamax(
 
         if alpha >= beta:
             # Beta cutoff: reward quiet moves via killer/history heuristics
-            if undo[0] == EMPTY and move[4] < 3:
+            if quiet:
                 killers = info.killers[min(ply, 63)]
                 if move not in killers:
                     killers.insert(0, move)
@@ -1049,11 +1049,6 @@ def _mvv_lva(gs: GameState, move: MoveTuple) -> int:
     attacker_value = PIECE_VALUES[board[move[0]][move[1]]]
     promo_bonus = PIECE_VALUES[AI_PROMO_TYPE[move[4]]] if move[4] >= 3 else 0
     return victim_value * 10 - attacker_value + promo_bonus
-
-
-def _promo_piece(move_type: int) -> str:
-    """Map an AI promotion move-type code (3-6) to its piece letter."""
-    return AI_PROMO_PIECES[move_type]
 
 
 def _first_on_ray(

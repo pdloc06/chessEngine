@@ -35,15 +35,24 @@ from engine.uci_client import (
     resolve_engine_command,
 )
 
-# How many games a full run plays, and the per-move search budget. The time
-# limit (not the depth) is what actually ends each search — DEPTH is only a
-# safety cap so a warm PyPy engine can't run away to an absurd depth on a
-# forced line. MAX_PLIES bounds a single game: draw detection already ends
-# games (50-move / threefold fold into an empty move list), but the cap
-# guarantees termination even if both engines shuffle forever.
+# How many games a full run plays, and the per-move search budget. MAX_PLIES
+# bounds a single game: draw detection already ends games (50-move / threefold
+# fold into an empty move list), but the cap guarantees termination even if
+# both engines shuffle forever.
+#
+# DEPTH was written as a "safety cap" on the assumption that the clock always
+# ends the search first. Measurement says otherwise: at a 0.2s budget, depth 6
+# completes naturally in roughly half of realistic positions — every endgame
+# and most late middlegames — and the engine then sits idle on the remaining
+# time. That matters when this harness is used for A/B measurement
+# (`engine.abtest`): in a cap-bound position a *faster* engine cannot convert
+# its speed into extra depth, so speed-oriented changes measure as no change
+# no matter how much they actually help. Raise DEPTH well above what the
+# budget can reach (~12) when measuring, so the clock is genuinely the
+# binding constraint.
 DEFAULT_GAMES = 20
 MOVETIME = 0.1   # seconds per move
-DEPTH = 6        # ply cap; the clock stops the search first
+DEPTH = 6        # ply cap; NOT always slack — see above
 MAX_PLIES = 300
 
 
