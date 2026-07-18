@@ -1297,6 +1297,26 @@ class GameState:
 
         return in_check, pins, checks
 
+    def side_to_move_in_check(self) -> bool:
+        """
+        Test whether the side to move is currently in check.
+
+        Unlike the cached ``in_check`` attribute — which is only refreshed by
+        ``get_valid_moves()`` and is therefore stale straight after a
+        ``make_ai_move()`` — this recomputes the answer on demand with a single
+        attack scan. The search uses it right after making a move to ask "did
+        that move give check?", the cheap way, without generating the reply
+        moves it would need for the cached flag.
+
+        Returns
+        -------
+        bool
+            True when the side to move's king stands on an attacked square.
+        """
+        row, col = (self.white_king_location if self.white_to_move
+                    else self.black_king_location)
+        return self._is_square_attacked(row, col)
+
     def _is_square_attacked(self, row: int, col: int) -> bool:
         """
         Determine if a specific square is under attack by any enemy piece.

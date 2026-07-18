@@ -44,6 +44,25 @@ def test_avoids_losing_queen_to_recapture():
     assert (best[2], best[3]) != (3, 3)
 
 
+def test_side_to_move_in_check_after_ai_move():
+    """Verify a checking move is detectable straight after ``make_ai_move()``.
+
+    The search must know whether the move it just made gives check, so it can
+    refuse to skip it. The cached ``in_check`` attribute cannot answer that:
+    only ``get_valid_moves()`` refreshes it, so after ``make_ai_move()`` it
+    still describes the *parent* position. This pins the distinction — the
+    search once read the stale flag, which silently disabled the guard meant
+    to keep forcing checks out of the futility skip.
+    """
+    # White queen d1 -> d8 delivers check to the black king on e8.
+    gs = GameState.from_fen('4k3/8/8/8/8/8/8/3QK3 w - - 0 1')
+    stale_before = gs.in_check
+    gs.make_ai_move((7, 3, 0, 3, 0))
+    assert gs.side_to_move_in_check() is True
+    # The cached flag did not move: it is still the pre-move value.
+    assert gs.in_check == stale_before
+
+
 # --- Search-strength regressions (guard LMR / aspiration / SEE) ---
 def test_finds_mate_via_quiet_key_move():
     """Verify the search still finds a forced mate whose first move is quiet.
