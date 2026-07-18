@@ -40,19 +40,18 @@ from engine.uci_client import (
 # fold into an empty move list), but the cap guarantees termination even if
 # both engines shuffle forever.
 #
-# DEPTH was written as a "safety cap" on the assumption that the clock always
-# ends the search first. Measurement says otherwise: at a 0.2s budget, depth 6
-# completes naturally in roughly half of realistic positions — every endgame
-# and most late middlegames — and the engine then sits idle on the remaining
-# time. That matters when this harness is used for A/B measurement
-# (`engine.abtest`): in a cap-bound position a *faster* engine cannot convert
-# its speed into extra depth, so speed-oriented changes measure as no change
-# no matter how much they actually help. Raise DEPTH well above what the
-# budget can reach (~12) when measuring, so the clock is genuinely the
-# binding constraint.
+# DEPTH used to be 6, described as a "safety cap" on the assumption that the
+# clock always ends the search first. Measurement said otherwise: at a 0.2s
+# budget, depth 6 completed naturally in 4 of 7 realistic positions — every
+# endgame and most late middlegames — leaving the engine idle on the rest of
+# its time. That quietly capped what `engine.abtest` could measure, because a
+# faster engine in a cap-bound position has nowhere to spend the speed, so
+# speed-oriented changes read as 0 Elo however much they really help. It now
+# sits above what the budget can reach, leaving the clock as the only binding
+# constraint; it still guarantees termination on a forced line.
 DEFAULT_GAMES = 20
 MOVETIME = 0.1   # seconds per move
-DEPTH = 6        # ply cap; NOT always slack — see above
+DEPTH = 12       # ply cap set above the budget's reach; the clock binds
 MAX_PLIES = 300
 
 

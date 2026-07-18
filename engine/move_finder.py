@@ -293,6 +293,16 @@ _root_rng = random.Random()
 # once per `search_position` call.
 _search_generation = 0
 
+# Nodes visited by the most recent `search_position` call. Published because
+# node count is the one search statistic that is *perfectly deterministic*:
+# given the same position, depth and root move order, two versions of this
+# engine visit the same nodes unless their pruning or ordering actually
+# differs. That makes it the right yardstick for changes meant to be
+# score-neutral (see `engine.bench`) — a self-play Elo match cannot resolve
+# anything under ~35 Elo without hundreds of games, while a node count
+# resolves a 1% difference in one run.
+last_search_nodes = 0
+
 
 class SearchTimeout(Exception):
     """Raised internally when the soft time limit expires mid-search."""
@@ -500,6 +510,8 @@ def search_position(
         if abs(best_score) >= MATE_THRESHOLD:
             break
 
+    global last_search_nodes
+    last_search_nodes = info.nodes
     return best_move, best_score
 
 

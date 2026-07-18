@@ -388,3 +388,29 @@ def test_uci_go_fills_and_newgame_clears_the_tt():
 
     uci.transposition_table.clear()
     assert uci.handle_go(gs, ['depth', '1']) != ''
+
+
+def test_node_count_is_reproducible_for_a_seeded_search():
+    """
+    Verify the property the benchmark's whole value rests on.
+
+    `engine.bench` compares engine versions by node count rather than by
+    playing games, because a node count carries no measurement noise — but
+    that only holds if a repeated search really does visit the same nodes.
+    Two things can break it: the root move shuffle (`_root_rng`), which
+    changes how much the search prunes, and the evaluation cache, which
+    carries work across searches. Pin the first and clear the second, and
+    the counts must match exactly.
+    """
+    fen = 'r2q1rk1/1p1n1ppp/p1pbpn2/8/2BP4/2N1PN2/PP3PPP/R1BQ1RK1 w - - 0 11'
+
+    def seeded_search() -> int:
+        move_finder._root_rng.seed(1234)
+        move_finder._EVAL_CACHE.clear()
+        gs = GameState.from_fen(fen)
+        move_finder.find_best_move(gs, max_depth=4, time_limit=60.0)
+        return move_finder.last_search_nodes
+
+    first = seeded_search()
+    assert first > 0
+    assert seeded_search() == first
