@@ -35,8 +35,8 @@ from engine.chess_engine import (
 MoveTuple = tuple[int, int, int, int, int]
 
 # Type alias for the transposition table: zobrist_key -> (depth, flag, score,
-# best_move, generation). Callers may hold one of these across searches (step 6:
-# the UCI adapter keeps a game-long table) and pass it to `find_best_move`. The
+# best_move, generation). Callers may hold one of these across searches (the
+# UCI adapter keeps a game-long table) and pass it to `find_best_move`. The
 # `generation` field stamps which search wrote the entry so the replacement
 # policy can evict entries left over from earlier moves (see `_negamax`).
 TTable = dict[int, tuple[int, int, int, MoveTuple | None, int]]
@@ -64,12 +64,12 @@ CHECKMATE_SCORE = 100_000
 MATE_THRESHOLD = 90_000  # Scores beyond this are "mate in N" scores
 DRAW_SCORE = 0
 
-# --- Step 6 evaluation terms (LICHESS_BOT_PLAN.md) ---
+# --- Positional evaluation terms ---
 # Two bishops cover both square colors; the pair is worth a few tenths of a
 # pawn beyond the pieces' individual values.
 BISHOP_PAIR_BONUS = 30
 
-# Rook activity (step 8): rooks earn their keep on files the pawns have
+# Rook activity: rooks earn their keep on files the pawns have
 # vacated. A semi-open file (own pawns gone) gives the rook targets; a fully
 # open file gives it the whole board; the 7th rank attacks the enemy's pawn
 # line and boxes in the king. These are the terms whose absence let the bot
@@ -142,7 +142,7 @@ _KNIGHT_TARGETS: tuple[tuple[tuple[tuple[int, int], ...], ...], ...] = tuple(
     for row in range(8)
 )
 
-# Pawn-structure penalties (step 8). Doubled pawns blockade each other and
+# Pawn-structure penalties. Doubled pawns blockade each other and
 # can't create passers; isolated pawns have no pawn that can ever defend
 # them, so they tie a piece to the job. Each is charged per offending pawn
 # beyond the first / per isolated pawn.
@@ -233,7 +233,7 @@ KING_END_PST: tuple[tuple[int, ...], ...] = (
     (-50, -30, -30, -30, -30, -30, -30, -50),
 )
 
-# Tapered evaluation (step 8): instead of one hard "now it's an endgame"
+# Tapered evaluation: instead of one hard "now it's an endgame"
 # switch, phase-dependent terms blend smoothly between their middlegame and
 # endgame values as pieces come off. The phase is the fraction of non-pawn
 # material still on the board, scaled to 0-256 (256 = everything still on;
@@ -255,7 +255,7 @@ TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
 # Null-move pruning depth reduction
 NULL_MOVE_REDUCTION = 2
 
-# Futility pruning margins (step 8). Both prunes trust the static eval near
+# Futility pruning margins. Both prunes trust the static eval near
 # the leaves, where a search this shallow couldn't recover a big material
 # swing anyway:
 # - Reverse futility: if the *side to move* is already ahead of beta by a
@@ -296,7 +296,7 @@ LMR_TABLE: tuple[tuple[int, ...], ...] = tuple(
     for d in range(64)
 )
 
-# Dynamic time management (step 8). Each deepening iteration costs roughly
+# Dynamic time management. Each deepening iteration costs roughly
 # 3-5x the one before it, so an iteration started with most of the budget
 # already spent will almost certainly be aborted mid-search — time spent,
 # nothing gained. Instead of starting it, stop and bank the remainder: under
@@ -385,7 +385,7 @@ class SearchInfo:
     tt : TTable
         Transposition table: zobrist_key -> (depth, flag, score, best_move,
         generation). Freshly built per search unless the caller passes a shared
-        table in, in which case results persist across searches (step 6: the
+        table in, in which case results persist across searches (the
         UCI adapter reuses one table for a whole game, so each move's search
         starts warm from the previous moves' work).
     generation : int
@@ -447,7 +447,7 @@ def find_best_move(
     tt : TTable, optional
         A transposition table to reuse and fill. Passing the same dict for
         every move of a game lets each search start from the previous
-        searches' results (step 6). Omitted, each search builds its own.
+        searches' results. Omitted, each search builds its own.
     hard_limit : float, optional
         Absolute ceiling in seconds for the panic extension (see
         `search_position`). Omitted, the soft limit is also the ceiling.
@@ -970,7 +970,7 @@ def _quiescence(gs: GameState, alpha: int, beta: int, ply: int, info: SearchInfo
     if stand_pat > alpha:
         alpha = stand_pat
 
-    # Captures-only generation (step 6 of LICHESS_BOT_PLAN.md): quiet moves
+    # Captures-only generation: quiet moves
     # are never materialized, which matters because the bulk of all visited
     # nodes are quiescence nodes. In check the generator returns the complete
     # evasion list instead, so an empty result there is a real checkmate —
@@ -1322,11 +1322,11 @@ def evaluate(gs: GameState) -> int:
     """
     Static evaluation of the position from White's perspective.
 
-    Combines raw material with piece-square table bonuses, plus the step 6
-    refinements — a bishop-pair bonus, passed-pawn bonuses that grow as the
+    Combines raw material with piece-square table bonuses, plus the
+    positional refinements — a bishop-pair bonus, passed-pawn bonuses that grow as the
     pawn advances, a king pawn-shield bonus, and a hard zero for positions
     where neither side has enough material to mate (so the bot offers/
-    accepts draws sensibly online) — and the step 8 terms: rook bonuses on
+    accepts draws sensibly online) — plus rook bonuses on
     semi-open/open files and the 7th rank, and doubled/isolated pawn
     penalties. Phase-sensitive terms (king tables, passed pawns, the pawn
     shield) are *tapered*: blended between middlegame and endgame values by

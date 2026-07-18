@@ -136,7 +136,7 @@ def test_lose_castling_rights_on_king_move(custom_gs):
     assert gs.white_castle_king_side is False
     assert gs.white_castle_queen_side is False
 
-# --- Captures-only generation (quiescence fast path, step 6) ---
+# --- Captures-only generation (quiescence fast path) ---
 
 def _noisy_reference(gs):
     """Reference implementation: filter the full legal AI move list down to

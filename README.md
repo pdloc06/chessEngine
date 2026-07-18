@@ -30,7 +30,7 @@ can be read as a walkthrough of how a chess engine works.
   and cycle through the sets from the main menu.
 - Board flipping, move animations, and player info bars.
 - A minimal UCI adapter (`engine/uci.py`) so the engine can talk to standard chess
-  tooling — see `LICHESS_BOT_PLAN.md` for the Lichess bot roadmap.
+  tooling — see `LICHESS_BOT.md` for the Lichess bot manual.
 
 ## Requirements
 
@@ -150,6 +150,6 @@ uv run --no-project python -m engine.selfplay        # 20 games (pass a number t
 | `pieces/` | Piece image assets (one subfolder per selectable piece set) |
 | `evaluate_icons/` | Move-quality icons used by the review screen |
 | `tests/` | Pytest suite |
-| `LICHESS_BOT_PLAN.md` | Roadmap and deployment recipe for running the engine as a Lichess bot |
+| `LICHESS_BOT.md` | How the engine runs as a Lichess bot: deployment, operations, traps |
 | `engine.sh` | Launcher template pointing lichess-bot at the UCI engine |
 | `bot` | control script for the Lichess bot (`bot up/down/status/log`); copy into the lichess-bot clone |

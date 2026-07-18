@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-PyCheckmate is a personal **learning project**: a Pygame chess game with a from-scratch AI engine, plus a UCI adapter aimed at running as a Lichess bot (roadmap in `LICHESS_BOT_PLAN.md`). Because it's a learning project, existing explanatory comments must be kept, and new comments/docstrings should be written in the same educational style. All docstrings use **NumPy style** (Parameters/Returns sections).
+PyCheckmate is a personal **learning project**: a Pygame chess game with a from-scratch AI engine, plus a UCI adapter that runs it as a Lichess bot (deployed; operations manual in `LICHESS_BOT.md`). Because it's a learning project, existing explanatory comments must be kept, and new comments/docstrings should be written in the same educational style. All docstrings use **NumPy style** (Parameters/Returns sections).
 
 ## Commands
 
@@ -55,6 +55,58 @@ The two paths meet at `Move.from_ai_tuple(tuple, board)` / `Move.to_ai_tuple()`:
 - Turn ownership: Player 1 always plays the bottom color — `player_one_color = 'b' if board_flipped else 'w'`. Flipping the board mid-game switches which color the human plays in vs-AI mode; this is intended behavior.
 - The AI runs on a daemon thread, never against the live state. Preferred path: the persistent PyPy UCI subprocess (toggled by `config.AI_USE_UCI_ENGINE`; it receives `position startpos moves <all moves>` so repetition history survives). Fallback on any failure: in-process `find_best_move` over an isolated copy (`GameState.from_fen(gs.to_fen())` plus copied `zobrist_history`). Results are tagged with a generation counter; undo/flip/restart bumps the generation so stale results are discarded. The worker writes its result `move` before `generation` so the reader never sees a half-published result.
 - Layout/colors/AI limits come from `config.py` (`THEME`, `AI_MAX_DEPTH`, `AI_TIME_LIMIT`, `AI_USE_UCI_ENGINE`, bar heights).
+
+## Measuring engine changes
+
+Engine work is judged by measurement, never by intuition — and the *instrument
+depends on what kind of change it is*. Getting this wrong once cost a whole
+program of overnight matches (search stages F–J) that returned ~0 net Elo, most
+of it unresolvable noise rather than real results.
+
+**Score-neutral changes** (faster evaluation, cheaper move generation, provably
+equivalent pruning) — use `uv run --no-project python -m engine.bench`, which
+reports node count *and* time:
+
+- **Node count is exactly deterministic, and it is the safety proof.** Identical
+  node totals across the bench positions mean the search made every same
+  decision, so the change cannot have altered how the engine plays. Guarded by
+  `test_node_count_is_reproducible_for_a_seeded_search`.
+- This only works because the bench seeds `move_finder._root_rng`. The root
+  shuffle changes how much the search prunes, so unseeded counts do not
+  reproduce and the whole method silently stops working.
+- Time is noisy (~29% run-to-run on this machine). Take best-of-5, run the two
+  versions back to back, and only believe a result whose sample ranges are
+  disjoint.
+- A microbenchmark of just the changed function separates the signal from the
+  ~85% of runtime the change doesn't touch.
+
+**Behaviour changes** (pruning that can change a result, evaluation terms, move
+ordering) — self-play A/B match:
+`uv run --no-project python -m engine.abtest "<baseline worktree>" 400`.
+
+- **400 games minimum.** 100 games resolve nothing finer than ±70 Elo while real
+  search changes are worth 10–30, so a 100-game verdict is noise wearing a
+  number.
+- The baseline is a detached git worktree parked at the last **kept** commit;
+  advance it after each keep.
+- Fixed movetime (0.2s) for search/eval changes.
+- **Never run two matches concurrently** — CPU contention corrupts both.
+- Engines load their code at spawn, so editing the working tree mid-match is
+  safe.
+- Commit each stage separately, then `git revert` if its match is clearly
+  negative — mixed uncommitted edits are miserable to unpick.
+
+**Time-management changes** are the awkward third case: redistributing the clock
+*is* a behaviour change, so node counts say nothing, but a fixed movetime
+removes the very thing being tuned. They need clock-mode self-play — expensive,
+and low-resolution for the question. Prefer instruments that observe the
+mechanism directly (does the engine spend longer on positions it historically
+blundered?) and demote self-play to a final regression gate.
+
+`selfplay.DEPTH` must stay above what the movetime can actually reach. It was 6,
+which let searches end on the ply cap rather than the clock in 4 of 7 realistic
+positions — a faster engine then has nowhere to spend its speed and measures as
+0 Elo however much it helps.
 
 ## Tests
 

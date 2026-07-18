@@ -24,7 +24,7 @@ ENGINE_AUTHOR = 'Lucas Pham'
 DEFAULT_DEPTH = 5
 DEFAULT_MOVETIME = 5.0  # seconds
 
-# Clock-aware time management (step 5 of LICHESS_BOT_PLAN.md). When the host
+# Clock-aware time management. When the host
 # sends clock fields instead of explicit limits, we budget a slice of the
 # remaining time for this one move and let iterative deepening stop on the
 # timer (`SearchTimeout`) rather than on depth.
@@ -42,7 +42,7 @@ PANIC_HARD_FACTOR = 2.5
 PANIC_CLOCK_DIVISOR = 8
 CLOCK_MAX_DEPTH = 64     # effectively unlimited: the clock is the real cap
 
-# Persistent transposition table (step 6 of LICHESS_BOT_PLAN.md): shared by
+# Persistent transposition table: shared by
 # every `go` of the same game so each search starts warm from the previous
 # moves' results, and cleared on `ucinewgame`. Zobrist keys identify
 # positions absolutely, so entries stay valid as the game advances.

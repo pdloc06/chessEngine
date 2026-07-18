@@ -1,7 +1,7 @@
 """
 Test suite for the UCI adapter's search-limit handling (uci.py).
 
-Step 5 of LICHESS_BOT_PLAN.md: Lichess sends clock fields (`wtime`/`btime`/
+Lichess sends clock fields (`wtime`/`btime`/
 `winc`/`binc`) on every `go`, and the adapter must turn them into a sensible
 per-move time budget instead of falling back to fixed defaults. These tests
 exercise the pure budgeting/parsing functions directly — no search needed —

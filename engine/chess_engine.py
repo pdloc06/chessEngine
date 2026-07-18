@@ -641,7 +641,7 @@ class GameState:
         captures_only : bool, optional
             If True, generate only "noisy" moves — captures, en passant, and
             promotions — without ever materializing quiet moves. This is the
-            quiescence-search fast path (step 6 of LICHESS_BOT_PLAN.md): most
+            quiescence-search fast path: most
             search nodes are quiescence nodes, and skipping quiet moves there
             saves both the generation and the later filtering work. Ignored
             while in check, where the complete evasion list is returned so an

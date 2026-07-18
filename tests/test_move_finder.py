@@ -218,7 +218,7 @@ def test_uci_apply_illegal_move_rejected(gs):
     assert uci.apply_uci_move(gs, 'e2e4') is True
 
 
-# --- Step 6 evaluation terms ---
+# --- Evaluation terms ---
 
 def test_insufficient_material_scores_zero(custom_gs):
     """Verify dead-drawn material evaluates to exactly zero."""
@@ -344,7 +344,7 @@ def test_king_pawn_shield_bonus(custom_gs):
     assert shielded - advanced == expected_delta
 
 
-# --- Step 6 persistent transposition table ---
+# --- Persistent transposition table ---
 
 def test_persistent_tt_reused_across_searches(gs):
     """Verify a caller-held table survives between searches and keeps
