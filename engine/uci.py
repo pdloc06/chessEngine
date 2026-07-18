@@ -32,6 +32,14 @@ CLOCK_FRACTION = 30      # spend ~1/30th of the remaining time per move
 INCREMENT_WEIGHT = 0.8   # plus most of the increment (keep a safety margin)
 MIN_MOVE_TIME = 0.05     # seconds — always think at least a tick
 MAX_MOVE_TIME = 20.0     # seconds — cap so long clocks aren't drained early
+
+# Panic-extension ceiling on the clock path: when the search sees its score
+# collapse it may think up to PANIC_HARD_FACTOR times the normal budget —
+# but never more than 1/PANIC_CLOCK_DIVISOR of the remaining clock, so a
+# string of panics can't flag the game. Explicit `movetime`/`depth` limits
+# are promises to the host and get no extension.
+PANIC_HARD_FACTOR = 2.5
+PANIC_CLOCK_DIVISOR = 8
 CLOCK_MAX_DEPTH = 64     # effectively unlimited: the clock is the real cap
 
 # Persistent transposition table (step 6 of LICHESS_BOT_PLAN.md): shared by
@@ -140,7 +148,7 @@ def clock_move_budget(remaining_ms: int, increment_ms: int) -> float:
     return max(MIN_MOVE_TIME, min(MAX_MOVE_TIME, budget))
 
 
-def parse_go_limits(tokens: list[str], white_to_move: bool) -> tuple[int, float]:
+def parse_go_limits(tokens: list[str], white_to_move: bool) -> tuple[int, float, float]:
     """
     Derive search limits (max depth, time budget) from `go` arguments.
 
@@ -161,9 +169,12 @@ def parse_go_limits(tokens: list[str], white_to_move: bool) -> tuple[int, float]
 
     Returns
     -------
-    tuple of (int, float)
-        `(max_depth, time_limit)` in plies and seconds, ready to pass to
-        `find_best_move`.
+    tuple of (int, float, float)
+        `(max_depth, time_limit, hard_limit)` in plies and seconds, ready to
+        pass to `find_best_move`. `hard_limit` exceeds `time_limit` only on
+        the clock path, where it funds the search's panic extension; with
+        explicit limits (or no limits) the two are equal and no extension
+        can happen.
     """
     values: dict[str, int] = {}
     for i, token in enumerate(tokens):
@@ -173,16 +184,23 @@ def parse_go_limits(tokens: list[str], white_to_move: bool) -> tuple[int, float]
 
     depth = values.get('depth')
     movetime = values['movetime'] / 1000.0 if 'movetime' in values else None
+    hard = None
 
     remaining = values.get('wtime' if white_to_move else 'btime')
     if movetime is None and remaining is not None:
         increment = values.get('winc' if white_to_move else 'binc', 0)
         movetime = clock_move_budget(remaining, increment)
+        # Fund the panic extension from the clock, never endangering it:
+        # the ceiling can't exceed a fixed fraction of what's actually left.
+        hard = max(movetime, min(PANIC_HARD_FACTOR * movetime,
+                                 remaining / 1000.0 / PANIC_CLOCK_DIVISOR))
         if depth is None:
             depth = CLOCK_MAX_DEPTH  # the clock, not the depth, stops the search
 
+    movetime = movetime if movetime is not None else DEFAULT_MOVETIME
     return (depth if depth is not None else DEFAULT_DEPTH,
-            movetime if movetime is not None else DEFAULT_MOVETIME)
+            movetime,
+            hard if hard is not None else movetime)
 
 
 def handle_go(gs: chess_engine.GameState, tokens: list[str]) -> str:
@@ -206,9 +224,9 @@ def handle_go(gs: chess_engine.GameState, tokens: list[str]) -> str:
     if len(transposition_table) > TT_MAX_ENTRIES:
         transposition_table.clear()
 
-    depth, movetime = parse_go_limits(tokens, gs.white_to_move)
+    depth, movetime, hard = parse_go_limits(tokens, gs.white_to_move)
     best = move_finder.find_best_move(gs, max_depth=depth, time_limit=movetime,
-                                      tt=transposition_table)
+                                      tt=transposition_table, hard_limit=hard)
     if best is None:
         return '0000'  # UCI null move: no legal moves available
 

@@ -211,6 +211,14 @@ LMR_REDUCTION = 1
 # a ~3x growth factor.
 SOFT_STOP_FRACTION = 0.45
 
+# Panic extension: when a completed iteration's score falls this many
+# centipawns below the previous iteration's, the engine has just "seen"
+# something bad — the moment a fixed budget is most likely to lock in a
+# blunder. The soft gate then widens to the full soft budget and the hard
+# abort moves out to the caller's hard limit (when one is given), letting
+# the search finish discovering what it started to see.
+PANIC_SCORE_DROP = 60
+
 # Aspiration windows: from this depth on, re-search around the previous
 # iteration's score inside a narrow window instead of the full one. Most
 # searches stay inside it, so alpha-beta prunes far more; the rare fail-high /
@@ -297,6 +305,7 @@ def find_best_move(
     max_depth: int = 4,
     time_limit: float = 5.0,
     tt: TTable | None = None,
+    hard_limit: float | None = None,
 ) -> MoveTuple | None:
     """
     Entry point for the AI: search the position and return the best move.
@@ -320,13 +329,16 @@ def find_best_move(
         A transposition table to reuse and fill. Passing the same dict for
         every move of a game lets each search start from the previous
         searches' results (step 6). Omitted, each search builds its own.
+    hard_limit : float, optional
+        Absolute ceiling in seconds for the panic extension (see
+        `search_position`). Omitted, the soft limit is also the ceiling.
 
     Returns
     -------
     MoveTuple or None
         The best move tuple found, or None if the position has no legal moves.
     """
-    return search_position(gs, valid_moves, max_depth, time_limit, tt)[0]
+    return search_position(gs, valid_moves, max_depth, time_limit, tt, hard_limit)[0]
 
 
 def search_position(
@@ -335,6 +347,7 @@ def search_position(
     max_depth: int = 4,
     time_limit: float = 5.0,
     tt: TTable | None = None,
+    hard_limit: float | None = None,
 ) -> tuple[MoveTuple | None, int]:
     """
     Search the position and return both the best move and its score.
@@ -359,6 +372,11 @@ def search_position(
     tt : TTable, optional
         A transposition table to reuse and fill across searches (see
         `find_best_move`). Omitted, each search builds its own.
+    hard_limit : float, optional
+        Absolute time ceiling in seconds for the *panic extension*: when an
+        iteration's score collapses (see PANIC_SCORE_DROP), the search may
+        keep thinking past the soft limit up to this ceiling. Omitted or
+        not above `time_limit`, panic changes nothing — old behavior.
 
     Returns
     -------
@@ -382,6 +400,9 @@ def search_position(
 
     global _search_generation
     _search_generation += 1
+    # The in-search abort limit starts at the soft budget; only a panic
+    # (below) moves it out to the hard ceiling.
+    hard = hard_limit if hard_limit is not None and hard_limit > time_limit else time_limit
     info = SearchInfo(time_limit, rep_counts, tt, _search_generation)
 
     # Shuffle once so equal-scoring moves vary between games
@@ -396,13 +417,17 @@ def search_position(
 
     best_move: MoveTuple | None = root_moves[0]
     best_score = -CHECKMATE_SCORE
+    prev_score: int | None = None
+    panic = False
 
     for depth in range(1, max_depth + 1):
         # Soft stop: never abandon depth 1 (a move must exist), but don't
         # start a deeper iteration that the remaining budget can't finish —
-        # see SOFT_STOP_FRACTION. The in-search hard abort stays as backstop.
-        if (depth > 1 and time.perf_counter() - info.start_time
-                > time_limit * SOFT_STOP_FRACTION):
+        # see SOFT_STOP_FRACTION. A panic widens the gate to the full soft
+        # budget. The in-search abort (at the soft limit normally, the hard
+        # ceiling during a panic) stays as backstop.
+        gate = time_limit if panic else time_limit * SOFT_STOP_FRACTION
+        if depth > 1 and time.perf_counter() - info.start_time > gate:
             break
         try:
             score, move = _aspiration_search(gs, root_moves, depth, info, best_score)
@@ -414,6 +439,15 @@ def search_position(
             # Re-order the root list so the current best is searched first
             root_moves.remove(move)
             root_moves.insert(0, move)
+            # Panic check: this iteration saw the score collapse relative to
+            # the previous one — the classic signature of a tactic spotted
+            # one ply too late. Re-checked every iteration, so a recovered
+            # score calms the search back down.
+            panic = (prev_score is not None
+                     and score < prev_score - PANIC_SCORE_DROP
+                     and abs(score) < MATE_THRESHOLD)
+            info.time_limit = hard if panic else time_limit
+            prev_score = score
 
         # A forced mate found: deeper search cannot improve it
         if abs(best_score) >= MATE_THRESHOLD:

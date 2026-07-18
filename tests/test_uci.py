@@ -37,44 +37,56 @@ def test_budget_clamps_high_on_long_clocks():
 # --- parse_go_limits: which numbers win ------------------------------------
 
 def test_explicit_depth_and_movetime_win():
-    """`go depth 3 movetime 2000` must be honored exactly as before."""
-    assert uci.parse_go_limits(['depth', '3', 'movetime', '2000'], True) == (3, 2.0)
+    """`go depth 3 movetime 2000` must be honored exactly as before — an
+    explicit budget is a promise, so the hard limit equals it (no panic
+    extension)."""
+    assert uci.parse_go_limits(['depth', '3', 'movetime', '2000'], True) == (3, 2.0, 2.0)
 
 
 def test_no_arguments_fall_back_to_defaults():
     """A bare `go` keeps the pre-step-5 behavior."""
-    assert uci.parse_go_limits([], True) == (uci.DEFAULT_DEPTH, uci.DEFAULT_MOVETIME)
+    assert uci.parse_go_limits([], True) == (
+        uci.DEFAULT_DEPTH, uci.DEFAULT_MOVETIME, uci.DEFAULT_MOVETIME)
 
 
 def test_clock_fields_drive_budget_for_white():
     """With only clock fields, White's clock sets the budget and the depth
-    cap is lifted so the timer — not the depth — ends the search."""
+    cap is lifted so the timer — not the depth — ends the search. The hard
+    limit funds the panic extension: PANIC_HARD_FACTOR times the budget,
+    but never more than 1/PANIC_CLOCK_DIVISOR of the remaining clock."""
     tokens = ['wtime', '180000', 'btime', '5000', 'winc', '0', 'binc', '0']
-    depth, movetime = uci.parse_go_limits(tokens, True)
+    depth, movetime, hard = uci.parse_go_limits(tokens, True)
     assert depth == uci.CLOCK_MAX_DEPTH
     assert movetime == 6.0
+    assert hard == min(uci.PANIC_HARD_FACTOR * 6.0, 180.0 / uci.PANIC_CLOCK_DIVISOR)
 
 
 def test_clock_fields_use_black_clock_when_black_moves():
     """The same tokens must budget from btime/binc for Black: 1s left with
-    no increment hits the MIN_MOVE_TIME floor, not White's 6 seconds."""
+    no increment hits the MIN_MOVE_TIME floor, not White's 6 seconds — and
+    the panic ceiling shrinks with the clock (1/PANIC_CLOCK_DIVISOR of the
+    1s left) but never below the budget itself."""
     tokens = ['wtime', '180000', 'btime', '1000', 'winc', '0', 'binc', '0']
-    depth, movetime = uci.parse_go_limits(tokens, False)
+    depth, movetime, hard = uci.parse_go_limits(tokens, False)
     assert depth == uci.CLOCK_MAX_DEPTH
     assert movetime == uci.MIN_MOVE_TIME
+    assert hard == max(uci.MIN_MOVE_TIME, 1.0 / uci.PANIC_CLOCK_DIVISOR)
 
 
 def test_movetime_beats_clock_fields():
-    """An explicit movetime overrides any clock arithmetic."""
+    """An explicit movetime overrides any clock arithmetic, including the
+    panic ceiling (hard == movetime: no extension on promised budgets)."""
     tokens = ['movetime', '1500', 'wtime', '600000', 'winc', '5000']
-    assert uci.parse_go_limits(tokens, True) == (uci.DEFAULT_DEPTH, 1.5)
+    assert uci.parse_go_limits(tokens, True) == (uci.DEFAULT_DEPTH, 1.5, 1.5)
 
 
 def test_explicit_depth_kept_alongside_clock():
     """`go depth 2 wtime ...` searches to depth 2 within the clock budget
-    (some GUIs combine both; the smaller constraint should win naturally)."""
+    (some GUIs combine both; the smaller constraint should win naturally).
+    The clock path still funds a panic ceiling: 2.5 x 6s, well under the
+    180s/8 clock cap."""
     tokens = ['depth', '2', 'wtime', '180000', 'btime', '180000']
-    assert uci.parse_go_limits(tokens, True) == (2, 6.0)
+    assert uci.parse_go_limits(tokens, True) == (2, 6.0, uci.PANIC_HARD_FACTOR * 6.0)
 
 
 # --- handle_go end to end --------------------------------------------------
