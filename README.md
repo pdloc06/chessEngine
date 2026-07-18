@@ -150,3 +150,6 @@ uv run --no-project python -m engine.selfplay        # 20 games (pass a number t
 | `pieces/` | Piece image assets (one subfolder per selectable piece set) |
 | `evaluate_icons/` | Move-quality icons used by the review screen |
 | `tests/` | Pytest suite |
+| `LICHESS_BOT_PLAN.md` | Roadmap and deployment recipe for running the engine as a Lichess bot |
+| `engine.sh` | Launcher template pointing lichess-bot at the UCI engine |
+| `com.pycheckmate.bot.plist` | launchd LaunchAgent template to run the bot always-on (macOS) |
