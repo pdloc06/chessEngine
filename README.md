@@ -122,6 +122,14 @@ uv run pytest tests/ -q          # Test suite (move generation, perft, search, F
 uv run mypy main.py config.py engine/ gui/ tests/
 ```
 
+For a heavier integration check before deploying the bot, the self-play smoke
+test plays two engine processes against each other and fails on any illegal move
+or crash:
+
+```bash
+uv run --no-project python -m engine.selfplay        # 20 games (pass a number to change)
+```
+
 ## Project layout
 
 | Path | Purpose |
@@ -136,6 +144,7 @@ uv run mypy main.py config.py engine/ gui/ tests/
 | `engine/uci.py` | UCI protocol adapter for running the engine outside the GUI |
 | `engine/uci_client.py` | Spawns the engine as a (PyPy) subprocess and talks UCI to it |
 | `engine/bench.py` | Engine speed benchmark for comparing interpreters |
+| `engine/selfplay.py` | Self-play smoke test: two UCI engines play full games, asserts no illegal moves/crashes |
 | `gui/` | Rendering: board graphics, animations, menus, panels |
 | `gui/review.py` | Review screen rendering: eval bar, graded move list, badges |
 | `pieces/` | Piece image assets (one subfolder per selectable piece set) |
