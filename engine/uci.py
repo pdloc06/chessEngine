@@ -24,11 +24,47 @@ ENGINE_AUTHOR = 'Lucas Pham'
 DEFAULT_DEPTH = 5
 DEFAULT_MOVETIME = 5.0  # seconds
 
-# Clock-aware time management. When the host
-# sends clock fields instead of explicit limits, we budget a slice of the
-# remaining time for this one move and let iterative deepening stop on the
-# timer (`SearchTimeout`) rather than on depth.
-CLOCK_FRACTION = 30      # spend ~1/30th of the remaining time per move
+# Clock-aware time management. When the host sends clock fields instead of
+# explicit limits, we budget a slice of the remaining time for this one move
+# and let iterative deepening stop on the timer (`SearchTimeout`) rather than
+# on depth.
+#
+# The budget divides the remaining clock by an *estimate of the moves still to
+# play*, rather than by a constant. A constant divisor is what this used to do
+# (`remaining / 30`), and it has a subtle failure: dividing by a fixed number
+# decays geometrically, so the clock is never actually spent. Replaying the
+# bot's 16 online games (`engine.tm_replay`) showed it finishing *sixty-move*
+# games with 28-48% of its clock unused — it was effectively playing a faster
+# time control than the one it had been given, while blundering in positions
+# where more thought was available and simply not taken.
+#
+# The same replay says where that reclaimed time belongs. Grading every move
+# the bot has played puts 73% of its blunders, mistakes and missed wins in
+# moves 21-40 (8% and 7% error rates, against 1% in moves 1-20 where the
+# opening book answers for us). So the curve is aimed to peak across that
+# band: EXPECTED_GAME_MOVES is set past a typical game so the estimate stays
+# generous through it, and MIN_MOVES_TO_GO keeps the divisor sane afterwards.
+EXPECTED_GAME_MOVES = 52  # our own moves; real games ran 26-67, averaging 45
+MIN_MOVES_TO_GO = 18      # floor on the estimate once the game runs long
+
+# Two emergency tiers. Spending harder mid-game necessarily drains the clock
+# faster, which without a brake would flag a marathon game; these restore
+# exactly the survival the old constant divisor had (both rules reach move
+# ~124 of a 5+0 game). They deliberately trigger only on a genuinely low
+# clock: an earlier draft engaged below 60s, which in a 5+0 game meant it
+# started hoarding around move 35 — safe, and precisely inside the band where
+# the errors actually happen.
+LOW_CLOCK_SECONDS = 25.0
+LOW_CLOCK_MOVES_TO_GO = 30
+PANIC_CLOCK_SECONDS = 10.0
+PANIC_CLOCK_MOVES_TO_GO = 60
+
+# Time the engine never gets to use: Lichess round-trip, the bridge, and
+# process scheduling. Budgeting the full clock ignores it and loses games on
+# time that were never lost on the board, so it comes off the top.
+MOVE_OVERHEAD = 0.15     # seconds per move lost outside the search
+CLOCK_RESERVE = 1.0      # never plan to spend the last second
+
 INCREMENT_WEIGHT = 0.8   # plus most of the increment (keep a safety margin)
 MIN_MOVE_TIME = 0.05     # seconds — always think at least a tick
 MAX_MOVE_TIME = 20.0     # seconds — cap so long clocks aren't drained early
@@ -121,15 +157,47 @@ def build_position(tokens: list[str]) -> chess_engine.GameState:
     return gs
 
 
-def clock_move_budget(remaining_ms: int, increment_ms: int) -> float:
+def moves_to_go(remaining_s: float, moves_played: int) -> int:
+    """
+    Estimate how many more moves this side still has to play.
+
+    Starts from `EXPECTED_GAME_MOVES` and counts down with the moves already
+    made, so the budget stays generous through the middlegame instead of
+    shrinking from move one. Once the game outlasts that estimate the count
+    stops at `MIN_MOVES_TO_GO`, and a genuinely low clock overrides both — at
+    that point surviving matters more than thinking.
+
+    Parameters
+    ----------
+    remaining_s : float
+        Seconds left on this side's clock.
+    moves_played : int
+        How many moves this side has already played.
+
+    Returns
+    -------
+    int
+        Divisor for the remaining clock: bigger means spend less now.
+    """
+    estimate = max(MIN_MOVES_TO_GO, EXPECTED_GAME_MOVES - moves_played)
+    if remaining_s < PANIC_CLOCK_SECONDS:
+        return max(estimate, PANIC_CLOCK_MOVES_TO_GO)
+    if remaining_s < LOW_CLOCK_SECONDS:
+        return max(estimate, LOW_CLOCK_MOVES_TO_GO)
+    return estimate
+
+
+def clock_move_budget(remaining_ms: int, increment_ms: int,
+                      moves_played: int = 0) -> float:
     """
     Compute the thinking-time budget for one move from the game clock.
 
-    The classic heuristic: assume roughly `CLOCK_FRACTION` moves remain in
-    the game, so spend that fraction of the remaining time — plus most of
-    the per-move increment, which is "free" time that comes back after every
-    move. The result is clamped so the engine neither moves instantly with a
-    full clock nor flags with a nearly empty one.
+    Spends the remaining clock divided by an estimate of the moves left to
+    play (see `moves_to_go`), plus most of the increment — which is "free"
+    time that comes back after every move. `MOVE_OVERHEAD` and
+    `CLOCK_RESERVE` come off the top first: neither is time the search can
+    actually use, and budgeting them away is what stops the engine losing on
+    time in a position it was winning on the board.
 
     Parameters
     ----------
@@ -137,18 +205,24 @@ def clock_move_budget(remaining_ms: int, increment_ms: int) -> float:
         Milliseconds left on the side-to-move's clock.
     increment_ms : int
         Milliseconds added to the clock after each move.
+    moves_played : int, optional
+        Moves this side has already played, used to age the estimate of how
+        many remain. Default 0 (treat the position as a game start).
 
     Returns
     -------
     float
         Time budget in seconds, clamped to [MIN_MOVE_TIME, MAX_MOVE_TIME].
     """
-    budget = (remaining_ms / 1000.0 / CLOCK_FRACTION
+    remaining_s = remaining_ms / 1000.0
+    usable = max(0.0, remaining_s - MOVE_OVERHEAD - CLOCK_RESERVE)
+    budget = (usable / moves_to_go(remaining_s, moves_played)
               + increment_ms / 1000.0 * INCREMENT_WEIGHT)
     return max(MIN_MOVE_TIME, min(MAX_MOVE_TIME, budget))
 
 
-def parse_go_limits(tokens: list[str], white_to_move: bool) -> tuple[int, float, float]:
+def parse_go_limits(tokens: list[str], white_to_move: bool,
+                    moves_played: int = 0) -> tuple[int, float, float]:
     """
     Derive search limits (max depth, time budget) from `go` arguments.
 
@@ -189,7 +263,7 @@ def parse_go_limits(tokens: list[str], white_to_move: bool) -> tuple[int, float,
     remaining = values.get('wtime' if white_to_move else 'btime')
     if movetime is None and remaining is not None:
         increment = values.get('winc' if white_to_move else 'binc', 0)
-        movetime = clock_move_budget(remaining, increment)
+        movetime = clock_move_budget(remaining, increment, moves_played)
         # Fund the panic extension from the clock, never endangering it:
         # the ceiling can't exceed a fixed fraction of what's actually left.
         hard = max(movetime, min(PANIC_HARD_FACTOR * movetime,
@@ -224,7 +298,10 @@ def handle_go(gs: chess_engine.GameState, tokens: list[str]) -> str:
     if len(transposition_table) > TT_MAX_ENTRIES:
         transposition_table.clear()
 
-    depth, movetime, hard = parse_go_limits(tokens, gs.white_to_move)
+    # Each side has played half the plies in the log; the budget uses that to
+    # age its estimate of how many moves are still to come.
+    depth, movetime, hard = parse_go_limits(tokens, gs.white_to_move,
+                                            len(gs.move_log) // 2)
     best = move_finder.find_best_move(gs, max_depth=depth, time_limit=movetime,
                                       tt=transposition_table, hard_limit=hard)
     if best is None:

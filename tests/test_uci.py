@@ -11,16 +11,40 @@ from engine import uci
 from engine.chess_engine import GameState, Move
 
 
-# --- clock_move_budget: the remaining/30 + 0.8*increment heuristic ---------
+# --- clock_move_budget: remaining / moves-left + 0.8*increment -------------
 
-def test_budget_formula_midgame_clock():
-    """10 minutes + 5s increment: 600/30 + 5*0.8 = 24s, capped at 20s."""
-    assert uci.clock_move_budget(600_000, 5_000) == uci.MAX_MOVE_TIME
+def test_increment_adds_to_the_budget():
+    """The increment is time that comes back after every move, so most of it
+    can be spent on top of the clock's share rather than hoarded."""
+    without = uci.clock_move_budget(600_000, 0)
+    with_inc = uci.clock_move_budget(600_000, 5_000)
+    assert with_inc == without + 5.0 * uci.INCREMENT_WEIGHT
 
 
-def test_budget_formula_no_increment():
-    """A 3-minute clock with no increment budgets 180/30 = 6 seconds."""
-    assert uci.clock_move_budget(180_000, 0) == 6.0
+def test_budget_divides_clock_by_the_moves_still_expected():
+    """A 3-minute clock at game start spreads over the expected game length,
+    minus the overhead and reserve that the search never gets to use."""
+    usable = 180.0 - uci.MOVE_OVERHEAD - uci.CLOCK_RESERVE
+    assert uci.clock_move_budget(180_000, 0) == usable / uci.EXPECTED_GAME_MOVES
+
+
+def test_budget_grows_as_the_game_goes_on():
+    """The point of the moves-to-go estimate: with the same clock, a move
+    deeper into the game gets a bigger share, because fewer moves remain to
+    spread it over. The old constant divisor did the opposite — it shrank
+    every move and left a third of the clock unspent at the end."""
+    early = uci.clock_move_budget(180_000, 0, moves_played=5)
+    late = uci.clock_move_budget(180_000, 0, moves_played=30)
+    assert late > early
+
+
+def test_budget_hoards_when_the_clock_runs_low():
+    """Below LOW_CLOCK_SECONDS survival outranks thinking, so the same
+    position budgets a smaller *fraction* of what is left."""
+    low = uci.LOW_CLOCK_SECONDS - 1.0
+    fraction_low = uci.clock_move_budget(int(low * 1000), 0, moves_played=40) / low
+    fraction_normal = uci.clock_move_budget(120_000, 0, moves_played=40) / 120.0
+    assert fraction_low < fraction_normal
 
 
 def test_budget_clamps_low_when_flagging():
@@ -44,7 +68,7 @@ def test_explicit_depth_and_movetime_win():
 
 
 def test_no_arguments_fall_back_to_defaults():
-    """A bare `go` keeps the pre-step-5 behavior."""
+    """A bare `go` falls back to the fixed defaults."""
     assert uci.parse_go_limits([], True) == (
         uci.DEFAULT_DEPTH, uci.DEFAULT_MOVETIME, uci.DEFAULT_MOVETIME)
 
@@ -56,9 +80,11 @@ def test_clock_fields_drive_budget_for_white():
     but never more than 1/PANIC_CLOCK_DIVISOR of the remaining clock."""
     tokens = ['wtime', '180000', 'btime', '5000', 'winc', '0', 'binc', '0']
     depth, movetime, hard = uci.parse_go_limits(tokens, True)
+    expected = uci.clock_move_budget(180_000, 0)
     assert depth == uci.CLOCK_MAX_DEPTH
-    assert movetime == 6.0
-    assert hard == min(uci.PANIC_HARD_FACTOR * 6.0, 180.0 / uci.PANIC_CLOCK_DIVISOR)
+    assert movetime == expected
+    assert hard == min(uci.PANIC_HARD_FACTOR * expected,
+                       180.0 / uci.PANIC_CLOCK_DIVISOR)
 
 
 def test_clock_fields_use_black_clock_when_black_moves():
@@ -83,10 +109,12 @@ def test_movetime_beats_clock_fields():
 def test_explicit_depth_kept_alongside_clock():
     """`go depth 2 wtime ...` searches to depth 2 within the clock budget
     (some GUIs combine both; the smaller constraint should win naturally).
-    The clock path still funds a panic ceiling: 2.5 x 6s, well under the
-    180s/8 clock cap."""
+    The clock path still funds a panic ceiling, well under the 180s/8 clock
+    cap."""
     tokens = ['depth', '2', 'wtime', '180000', 'btime', '180000']
-    assert uci.parse_go_limits(tokens, True) == (2, 6.0, uci.PANIC_HARD_FACTOR * 6.0)
+    expected = uci.clock_move_budget(180_000, 0)
+    assert uci.parse_go_limits(tokens, True) == (
+        2, expected, uci.PANIC_HARD_FACTOR * expected)
 
 
 # --- handle_go end to end --------------------------------------------------

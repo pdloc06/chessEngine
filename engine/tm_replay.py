@@ -183,6 +183,21 @@ def main() -> None:
         print(f'{grade:14} {len(times):4d} {sum(times) / len(times):7.1f}s '
               f'{times[len(times) // 2]:7.1f}s')
 
+    # Where in the game do things actually go wrong? Time is worth spending
+    # where the mistakes are, so this histogram is what any new allocation
+    # curve should be aimed at.
+    print('\n=== when the bot goes wrong (own move number) ===')
+    print(f'{"moves":10} {"our moves":>10} {"critical":>9} {"rate":>7} {"mean time":>10}')
+    buckets = ((1, 10), (11, 20), (21, 30), (31, 40), (41, 60), (61, 200))
+    for lo, hi in buckets:
+        band = [r for r in all_records if lo <= r['ply'] // 2 + 1 <= hi]
+        if not band:
+            continue
+        crit = [r for r in band if r['grade'] in CRITICAL]
+        mean = sum(r['spent'] for r in band) / len(band)
+        print(f'{f"{lo}-{hi}":10} {len(band):10d} {len(crit):9d} '
+              f'{100 * len(crit) / len(band):6.0f}% {mean:9.1f}s')
+
     critical = [r['spent'] for r in all_records if r['grade'] in CRITICAL]
     routine = [r['spent'] for r in all_records
                if r['grade'] not in CRITICAL and r['grade'] != analysis.BOOK]

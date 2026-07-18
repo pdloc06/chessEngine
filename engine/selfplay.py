@@ -116,8 +116,11 @@ def play_game(white: UciEngineClient, black: UciEngineClient,
         mover = 0 if gs.white_to_move else 1
 
         if clock:
+            # Half the plies played are this side's, which is what the budget
+            # needs to age its estimate of the moves still to come.
             budget = clock_move_budget(int(remaining[mover] * 1000),
-                                       int(clock[1] * 1000))
+                                       int(clock[1] * 1000),
+                                       len(played) // 2)
             started = time.monotonic()
         else:
             budget = movetime
