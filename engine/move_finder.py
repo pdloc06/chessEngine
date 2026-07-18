@@ -39,6 +39,17 @@ MoveTuple = tuple[int, int, int, int, int]
 # policy can evict entries left over from earlier moves (see `_negamax`).
 TTable = dict[int, tuple[int, int, int, MoveTuple | None, int]]
 
+# Evaluation cache: zobrist_key -> static score. The search revisits the same
+# position many times (transpositions, aspiration re-searches, quiescence
+# stand-pats), and the static evaluation is a pure function of the position —
+# so each position only ever needs the full 64-square scan once. Unlike the
+# transposition table there is nothing to invalidate: a position's static
+# score never changes, so the cache safely persists across searches and is
+# simply rebuilt when it grows past its bound (entries are ints, so the bound
+# keeps it well under the TT's footprint).
+_EVAL_CACHE: dict[int, int] = {}
+_EVAL_CACHE_MAX = 1_000_000
+
 # --- Evaluation constants ---
 # Indexed by the integer piece code (1-12); both colours share a value. Index 0
 # (empty) and the kings (6, 12) are 0 so material scans can add unconditionally.
@@ -1117,6 +1128,10 @@ def evaluate(gs: GameState) -> int:
     the fraction of non-pawn material remaining, so no single exchange can
     step the score discontinuously.
 
+    Results are memoized in `_EVAL_CACHE` by Zobrist key: the search visits
+    the same position many times over, and the static score of a position
+    never changes, so the full scan below runs at most once per position.
+
     Parameters
     ----------
     gs : GameState
@@ -1128,9 +1143,19 @@ def evaluate(gs: GameState) -> int:
     int
         Positive scores favor White, negative favor Black (centipawns).
     """
+    # A position's static score is immutable, so the Zobrist key can answer
+    # for it forever. Hits skip the entire scan below.
+    key = gs.zobrist_key
+    cached = _EVAL_CACHE.get(key)
+    if cached is not None:
+        return cached
+
     # Dead-drawn material scores exactly zero. The piece-count guard keeps
     # this from costing anything in normal positions.
     if len(gs.white_pieces) + len(gs.black_pieces) <= 4 and _insufficient_material(gs):
+        if len(_EVAL_CACHE) >= _EVAL_CACHE_MAX:
+            _EVAL_CACHE.clear()
+        _EVAL_CACHE[key] = DRAW_SCORE
         return DRAW_SCORE
 
     board = gs.board
@@ -1262,6 +1287,9 @@ def evaluate(gs: GameState) -> int:
                   - KING_SHIELD_BONUS * _pawn_shield(board, bk_row, bk_col, BP, 1))
         score += shield * phase // PHASE_MAX
 
+    if len(_EVAL_CACHE) >= _EVAL_CACHE_MAX:
+        _EVAL_CACHE.clear()
+    _EVAL_CACHE[key] = score
     return score
 
 
