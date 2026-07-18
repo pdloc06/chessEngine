@@ -528,7 +528,18 @@ def _search_root(
         child_key = gs.zobrist_key
         info.rep_counts[child_key] = info.rep_counts.get(child_key, 0) + 1
         try:
-            score = -_negamax(gs, depth - 1, -beta, -alpha, 1, info)
+            # Principal variation search at the root: only the first move (the
+            # previous iteration's best, thanks to the pre-ordering) gets the
+            # full window. Every later move is first *scouted* with a null
+            # window — "prove you are worse than the best so far" is a much
+            # cheaper question than "what is your exact score" — and only a
+            # scout that beats alpha earns the full-window re-search.
+            if best_move is None:
+                score = -_negamax(gs, depth - 1, -beta, -alpha, 1, info)
+            else:
+                score = -_negamax(gs, depth - 1, -alpha - 1, -alpha, 1, info)
+                if alpha < score < beta:
+                    score = -_negamax(gs, depth - 1, -beta, -alpha, 1, info)
         finally:
             info.rep_counts[child_key] -= 1
             gs.unmake_ai_move(move, undo)
@@ -719,13 +730,21 @@ def _negamax(
         child_key = gs.zobrist_key
         info.rep_counts[child_key] = info.rep_counts.get(child_key, 0) + 1
         try:
-            # Late move reduction: a quiet move ordered late (not a capture,
-            # promotion, killer, or checking move, and not while we are in
-            # check) is unlikely to be best, so scout it a ply shallower with a
-            # null window. Only if that beats alpha do we pay for a full-depth,
-            # full-width re-search. `gs.in_check` here reflects the position
-            # *after* the move, i.e. whether the move gives check.
-            reduce = (
+            # Principal variation search: the first move — the TT/ordering
+            # favourite — is searched with the full window and becomes the
+            # standard every sibling must beat. Each later move is *scouted*
+            # with a null window, which asks the much cheaper question "are
+            # you worse than the best so far?"; with good move ordering the
+            # answer is almost always yes, and the scout's refutation subtree
+            # stays tiny. Only a scout that beats alpha earns the full-window
+            # re-search that establishes its exact score.
+            #
+            # Late move reduction rides on the same scout: a quiet move
+            # ordered late (not a capture, promotion, killer, or checking
+            # move, and not while we are in check) is unlikely to be best, so
+            # its scout also runs a ply shallower. `gs.in_check` here reflects
+            # the position *after* the move, i.e. whether the move gives check.
+            reduction = LMR_REDUCTION if (
                 depth >= LMR_MIN_DEPTH
                 and move_index >= LMR_MIN_MOVE_INDEX
                 and not in_check
@@ -733,13 +752,18 @@ def _negamax(
                 and undo[0] == EMPTY
                 and move[4] < 3
                 and move not in info.killers[min(ply, 63)]
-            )
-            if reduce:
-                score = -_negamax(gs, depth - 1 - LMR_REDUCTION, -alpha - 1, -alpha, ply + 1, info)
-                if score > alpha:
-                    score = -_negamax(gs, depth - 1, -beta, -alpha, ply + 1, info)
-            else:
+            ) else 0
+            if best_move is None:
                 score = -_negamax(gs, depth - 1, -beta, -alpha, ply + 1, info)
+            else:
+                score = -_negamax(gs, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, info)
+                # A reduced scout that beats alpha must be re-searched at
+                # full depth even when it also beats beta — a cutoff claimed
+                # from a shallower search is not trustworthy. An unreduced
+                # scout that fails high (>= beta) already is a full-depth
+                # lower bound, so the cutoff below can take it as is.
+                if score > alpha and (reduction or score < beta):
+                    score = -_negamax(gs, depth - 1, -beta, -alpha, ply + 1, info)
         finally:
             info.rep_counts[child_key] -= 1
             gs.unmake_ai_move(move, undo)
