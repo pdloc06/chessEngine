@@ -10,7 +10,10 @@ tuple-move interface exposed by `chess_engine.GameState`:
 - Quiescence search (captures/promotions only) to avoid horizon effects
 - Move ordering: TT move > MVV-LVA captures > promotions > killers > history
 - Null-move pruning and check extensions
-- Static evaluation combining material and piece-square tables
+- Late move reductions, aspiration windows, SEE-pruned quiescence
+- Reverse futility and frontier futility pruning near the leaves
+- Static evaluation: material, piece-square tables, pawn structure, rook
+  activity, and king safety, tapered between middlegame and endgame
 
 The search mutates the GameState in place via `make_ai_move()` /
 `unmake_ai_move()` and always restores it before returning, so the caller's
@@ -175,6 +178,21 @@ TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
 
 # Null-move pruning depth reduction
 NULL_MOVE_REDUCTION = 2
+
+# Futility pruning margins (step 8). Both prunes trust the static eval near
+# the leaves, where a search this shallow couldn't recover a big material
+# swing anyway:
+# - Reverse futility: if the *side to move* is already ahead of beta by a
+#   comfortable margin, the opponent won't allow this line — fail high now
+#   instead of searching it.
+# - Frontier futility: if the side to move is far *below* alpha, a quiet
+#   move can't close the gap within the remaining depth — skip it and let
+#   captures/checks speak for themselves.
+# Margins grow with remaining depth because deeper subtrees can swing more.
+RFP_MAX_DEPTH = 3
+RFP_MARGIN = 120                  # per remaining ply
+FUTILITY_MAX_DEPTH = 2
+FUTILITY_MARGIN = (0, 150, 300)   # indexed by remaining depth
 
 # Late move reductions: quiet moves ordered past the first few are searched one
 # ply shallower with a scout window, and only re-searched at full depth if the
@@ -563,6 +581,20 @@ def _negamax(
     if in_check:
         depth += 1
 
+    # One static eval serves both futility prunes below. Only computed near
+    # the leaves and never while in check (a checked position's static score
+    # is meaningless — the whole point of the check extension above).
+    static_eval: int | None = None
+    if depth <= max(RFP_MAX_DEPTH, FUTILITY_MAX_DEPTH) and not in_check:
+        static_eval = evaluate(gs) if gs.white_to_move else -evaluate(gs)
+
+    # Reverse futility pruning: standing far enough above beta that no
+    # reply within this depth plausibly drags us back below it.
+    if (static_eval is not None and depth <= RFP_MAX_DEPTH
+            and beta < MATE_THRESHOLD
+            and static_eval - RFP_MARGIN * depth >= beta):
+        return static_eval - RFP_MARGIN * depth
+
     # Null-move pruning: if skipping our turn still fails high, prune.
     # Avoided in check and in pawn-only endings where zugzwang is common.
     if depth >= 3 and not in_check and beta < MATE_THRESHOLD and _has_major_material(gs):
@@ -576,12 +608,31 @@ def _negamax(
 
     ordered = _order_moves(gs, moves, tt_move, info, ply)
 
+    # Frontier futility applies when the static eval sits hopelessly below
+    # alpha at shallow depth; quiet moves are then skipped inside the loop.
+    # Mate-score windows are exempt: when hunting a mate, "hopeless" material
+    # arithmetic doesn't apply. The margin-padded score is fixed here; alpha
+    # only rises during the loop, so the in-loop comparison only gets stricter.
+    futility_score: int | None = None
+    if (static_eval is not None and depth <= FUTILITY_MAX_DEPTH
+            and abs(alpha) < MATE_THRESHOLD):
+        futility_score = static_eval + FUTILITY_MARGIN[depth]
+
     original_alpha = alpha
     best_score = -CHECKMATE_SCORE
     best_move: MoveTuple | None = None
 
     for move_index, move in enumerate(ordered):
         undo = gs.make_ai_move(move)
+        # Skip a futile quiet move — but only after at least one move has
+        # been fully searched (so a real score always exists), and never one
+        # that captures, promotes, or gives check. `gs.in_check` reflects
+        # the position after the move, exactly as the LMR test below uses it.
+        if (futility_score is not None and best_move is not None
+                and futility_score <= alpha
+                and undo[0] == EMPTY and move[4] < 3 and not gs.in_check):
+            gs.unmake_ai_move(move, undo)
+            continue
         child_key = gs.zobrist_key
         info.rep_counts[child_key] = info.rep_counts.get(child_key, 0) + 1
         try:
