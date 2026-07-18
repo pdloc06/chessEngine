@@ -127,7 +127,10 @@ In rough order of value per effort:
 ## Testing pipeline (before going online)
 
 1. `pytest tests/ -q` — engine correctness (perft, zobrist, search sanity).
-2. Self-play smoke: two `engine.uci` processes under `cutechess-cli` or a tiny
-   driver script, 20+ games, assert no crashes/illegal moves.
+2. Self-play smoke: `uv run --no-project python -m engine.selfplay` — spawns two
+   `engine.uci` processes, plays 20 full games refereed by a `GameState`, and
+   exits non-zero on any illegal move or engine crash. Exercises the whole UCI +
+   search + make/unmake stack over complete games (the integration coverage
+   perft can't give).
 3. `lichess-bot` in casual-only mode vs. your own human account.
 4. Only then open the challenge gate to the public and rated games.
