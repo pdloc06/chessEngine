@@ -256,6 +256,13 @@ LMR_TABLE: tuple[tuple[int, ...], ...] = tuple(
     for d in range(64)
 )
 
+# Internal iterative reduction (search-review stage J): a node with no TT move
+# is one the ordering knows nothing about — its move loop will be searched in
+# near-random order, making it expensive and unreliable. Rather than pay full
+# price, reduce its depth by one ply; the shallower pass seeds the TT, so a
+# revisit (there almost always is one) starts with a real best move.
+IIR_MIN_DEPTH = 4
+
 # Dynamic time management (step 8). Each deepening iteration costs roughly
 # 3-5x the one before it, so an iteration started with most of the budget
 # already spent will almost certainly be aborted mid-search — time spent,
@@ -330,6 +337,13 @@ class SearchInfo:
         Two killer moves (quiet beta-cutoff moves) per ply.
     history : dict of tuple to int
         History heuristic scores for quiet move ordering.
+    counters : dict of tuple to MoveTuple
+        Countermove table (stage J): the quiet move that last refuted a given
+        opponent move (keyed by its from/to squares). "The" answer to a move
+        tends to stay the answer wherever that move appears in the tree.
+    move_stack : list of MoveTuple or None
+        The move made at each ply along the current search path (None after a
+        null move); lets a node look up what the opponent just played.
     rep_counts : dict of int, int
         Occurrence counts of Zobrist keys along game history + search path.
     """
@@ -343,6 +357,8 @@ class SearchInfo:
         self.generation: int = generation
         self.killers: list[list[MoveTuple]] = [[] for _ in range(64)]
         self.history: dict[tuple[int, int, int, int], int] = {}
+        self.counters: dict[tuple[int, int, int, int], MoveTuple] = {}
+        self.move_stack: list[MoveTuple | None] = [None] * 64
         self.rep_counts: dict[int, int] = rep_counts
 
     def check_time(self) -> None:
@@ -553,6 +569,7 @@ def _search_root(
         undo = gs.make_ai_move(move)
         child_key = gs.zobrist_key
         info.rep_counts[child_key] = info.rep_counts.get(child_key, 0) + 1
+        info.move_stack[0] = move
         try:
             # Principal variation search at the root: only the first move (the
             # previous iteration's best, thanks to the pre-ordering) gets the
@@ -687,6 +704,12 @@ def _negamax(
             if tt_flag == TT_UPPER and tt_score <= alpha:
                 return tt_score
 
+    # Internal iterative reduction (stage J): no TT move means the move loop
+    # below runs blind — search this node a ply shallower and let the TT entry
+    # it leaves behind guide the (near-certain) deeper revisit.
+    if tt_move is None and depth >= IIR_MIN_DEPTH:
+        depth -= 1
+
     if depth <= 0:
         return _quiescence(gs, alpha, beta, ply, info)
 
@@ -719,6 +742,9 @@ def _negamax(
     # Avoided in check and in pawn-only endings where zugzwang is common.
     if depth >= 3 and not in_check and beta < MATE_THRESHOLD and _has_major_material(gs):
         null_undo = gs.make_null_move()
+        # No move was played at this ply: clear the stack slot so the child
+        # doesn't attribute a countermove to a stale entry.
+        info.move_stack[min(ply, 63)] = None
         try:
             null_score = -_negamax(gs, depth - 1 - NULL_MOVE_REDUCTION, -beta, -beta + 1, ply + 1, info)
         finally:
@@ -779,6 +805,7 @@ def _negamax(
             continue
         child_key = gs.zobrist_key
         info.rep_counts[child_key] = info.rep_counts.get(child_key, 0) + 1
+        info.move_stack[min(ply, 63)] = move
         try:
             # Principal variation search: the first move — the TT/ordering
             # favourite — is searched with the full window and becomes the
@@ -838,6 +865,11 @@ def _negamax(
                     del killers[2:]
                 hist_key = (move[0], move[1], move[2], move[3])
                 info.history[hist_key] = info.history.get(hist_key, 0) + depth * depth
+                # Countermove (stage J): remember this quiet move as the
+                # refutation of whatever the opponent just played.
+                prev = info.move_stack[min(ply - 1, 63)] if ply > 0 else None
+                if prev is not None:
+                    info.counters[(prev[0], prev[1], prev[2], prev[3])] = move
             break
 
     # Store in the transposition table (mate scores excluded: they are
@@ -992,7 +1024,8 @@ def _order_moves(
 
     Ordering priority: TT best move, then captures by MVV-LVA (Most Valuable
     Victim - Least Valuable Attacker), then promotions, then killer moves,
-    then quiet moves by history heuristic.
+    then the countermove to the opponent's last move, then quiet moves by
+    history heuristic.
 
     Parameters
     ----------
@@ -1015,6 +1048,11 @@ def _order_moves(
     board = gs.board
     killers = info.killers[min(ply, 63)]
     history = info.history
+    # Countermove (stage J): the quiet move that last refuted whatever the
+    # opponent just played — a killer keyed by their move instead of by ply.
+    prev = info.move_stack[min(ply - 1, 63)] if ply > 0 else None
+    counter = (info.counters.get((prev[0], prev[1], prev[2], prev[3]))
+               if prev is not None else None)
 
     def score(move: MoveTuple) -> int:
         if move == tt_move:
@@ -1037,6 +1075,8 @@ def _order_moves(
             return 900_000 + PIECE_VALUES[AI_PROMO_TYPE[move[4]]]
         if move in killers:
             return 800_000
+        if move == counter:
+            return 700_000
         return history.get((move[0], move[1], move[2], move[3]), 0)
 
     return sorted(moves, key=score, reverse=True)
