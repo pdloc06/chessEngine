@@ -227,6 +227,15 @@ FUTILITY_MARGIN = (0, 150, 300)   # indexed by remaining depth
 # positional swing, cannot lift the line back to alpha.
 DELTA_MARGIN = 200
 
+# Late move pruning (search-review stage H): with sound ordering, the
+# umpteenth *quiet* move at shallow depth almost never rescues a node — every
+# quiet move the ordering believed in came earlier. Once the per-depth budget
+# below is spent, remaining quiet moves are skipped outright. Killers and
+# moves with a proven history record are exempt: they have earned their look.
+LMP_MAX_DEPTH = 3
+LMP_COUNT = (0, 4, 7, 12)         # quiet-move budget, indexed by remaining depth
+HISTORY_EXEMPT_SCORE = 64         # history score that buys immunity from LMP
+
 # Late move reductions: quiet moves ordered past the first few are searched one
 # ply shallower with a scout window, and only re-searched at full depth if the
 # scout unexpectedly beats alpha. Conservative settings (reduce by one, only
@@ -720,16 +729,40 @@ def _negamax(
     original_alpha = alpha
     best_score = -CHECKMATE_SCORE
     best_move: MoveTuple | None = None
+    quiet_count = 0
 
     for move_index, move in enumerate(ordered):
         undo = gs.make_ai_move(move)
-        # Skip a futile quiet move — but only after at least one move has
-        # been fully searched (so a real score always exists), and never one
-        # that captures, promotes, or gives check. `gs.in_check` reflects
-        # the position after the move, exactly as the LMR test below uses it.
-        if (futility_score is not None and best_move is not None
-                and futility_score <= alpha
-                and undo[0] == EMPTY and move[4] < 3 and not gs.in_check):
+        # A "quiet" move: no capture, no promotion, gives no check.
+        # `gs.in_check` reflects the position after the move, exactly as the
+        # LMR test below uses it.
+        quiet = undo[0] == EMPTY and move[4] < 3 and not gs.in_check
+        if quiet:
+            quiet_count += 1
+        # Two ways a quiet move gets skipped — in both cases only after at
+        # least one move has been fully searched, so a real score exists:
+        # - Frontier futility: the static eval sits so far below alpha that
+        #   no quiet move can close the gap at this depth.
+        # - Late move pruning (stage H): the quiet-move budget for this
+        #   depth is spent; the ordering already surfaced every quiet move
+        #   it believed in. Killers and history-proven moves are exempt,
+        #   nodes in check never prune (every move is a forced evasion), and
+        #   neither do PV nodes (window wider than a null window): a scout
+        #   that fails high is re-searched with the full window, and that
+        #   re-search must see *every* move — it is what keeps a quiet
+        #   mating idea (see test_finds_mate_via_quiet_key_move) from being
+        #   pruned out of existence.
+        if quiet and best_move is not None and (
+                (futility_score is not None and futility_score <= alpha)
+                or (depth <= LMP_MAX_DEPTH
+                    and not in_check
+                    and beta - alpha == 1
+                    and quiet_count > LMP_COUNT[depth]
+                    and abs(alpha) < MATE_THRESHOLD
+                    and move not in info.killers[min(ply, 63)]
+                    and info.history.get(
+                        (move[0], move[1], move[2], move[3]), 0)
+                    < HISTORY_EXEMPT_SCORE)):
             gs.unmake_ai_move(move, undo)
             continue
         child_key = gs.zobrist_key
