@@ -16,7 +16,7 @@ Like the rest of `engine/`, this module is pure stdlib.
 """
 import re
 
-from engine.chess_engine import GameState, Move
+from engine.chess_engine import GameState, INT_TO_CODE, Move
 
 # One `[Tag "Value"]` header pair, e.g. [Event "Casual game"]
 _TAG_RE = re.compile(r'^\s*\[(\w+)\s+"(.*)"\]\s*$')
@@ -162,7 +162,7 @@ def san_to_move(gs: GameState, san: str, valid_moves: list[Move] | None = None) 
 
         matches = []
         for move in valid_moves:
-            if move.is_castle_move or move.piece_moved[1] != piece:
+            if move.is_castle_move or INT_TO_CODE[move.piece_moved][1] != piece:
                 continue
             if (move.end_row, move.end_col) != (end_row, end_col):
                 continue

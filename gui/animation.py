@@ -13,7 +13,7 @@ from gui import graphics
 def animate_move(
     move: chess_engine.Move,
     screen: pg.Surface,
-    board: list[list[str]],
+    board: list[list[int]],
     clock: pg.time.Clock,
     board_flipped: bool,
     coord_font: pg.font.Font,
@@ -83,16 +83,19 @@ def animate_move(
         pg.draw.rect(screen, erase_color, erase_square)
 
         # Redraw captured piece if necessary to keep it visible until overwritten
-        if not move_unmake and move.piece_captured != '--':
+        # (config.IMAGES is keyed by the two-char code, so convert the int here)
+        if not move_unmake and move.piece_captured != chess_engine.EMPTY:
+            captured_image = config.IMAGES[chess_engine.INT_TO_CODE[move.piece_captured]]
             if move.is_enpassant_move:
                 ep_x, ep_y = graphics.board_to_screen(move.start_row, move.end_col, board_flipped)
                 enpassant_square = pg.Rect(ep_x, ep_y, config.SQ_SIZE, config.SQ_SIZE)
-                screen.blit(config.IMAGES[move.piece_captured], enpassant_square)
+                screen.blit(captured_image, enpassant_square)
             else:
-                screen.blit(config.IMAGES[move.piece_captured], erase_square)
+                screen.blit(captured_image, erase_square)
 
         # Draw the moving piece at its current interpolated position
-        screen.blit(config.IMAGES[move.piece_moved], pg.Rect(x, y, config.SQ_SIZE, config.SQ_SIZE))
+        moved_image = config.IMAGES[chess_engine.INT_TO_CODE[move.piece_moved]]
+        screen.blit(moved_image, pg.Rect(x, y, config.SQ_SIZE, config.SQ_SIZE))
 
         pg.display.flip()
         clock.tick(config.ANIMATION_FPS)

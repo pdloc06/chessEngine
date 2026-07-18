@@ -3,7 +3,7 @@ Shared configuration and fixtures for pytest.
 Pytest automatically discovers this file; no need to import these fixtures manually.
 """
 import pytest
-from engine.chess_engine import GameState
+from engine.chess_engine import CODE_TO_INT, GameState
 
 
 @pytest.fixture
@@ -25,9 +25,15 @@ def custom_gs():
         gs = custom_gs(empty_board_array, white_turn=True)
     """
 
-    def _setup(board_array: list[list[str]], white_turn: bool = True) -> GameState:
+    def _setup(board_array: list[list], white_turn: bool = True) -> GameState:
         game_state = GameState()
-        game_state.board = board_array
+        # Tests hand-build boards with the legacy 'wP'/'--' codes for
+        # readability; convert them to the engine's integer encoding here, the
+        # single choke point every hand-built fixture already flows through.
+        game_state.board = [
+            [CODE_TO_INT[cell] if isinstance(cell, str) else cell for cell in row]
+            for row in board_array
+        ]
         game_state.white_to_move = white_turn
         game_state.halfmove_clock = 0
 

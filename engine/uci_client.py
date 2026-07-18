@@ -11,9 +11,6 @@ so the GUI exercises exactly the code path the bot will.
 The subprocess is kept alive between moves on purpose: PyPy's JIT compiles
 the hot search loops during the first searches, and later moves in the
 game get the fully warmed-up speed.
-
-AI_PLANNING: This client mirrors what `lichess-bot` does to our engine.
-Anything that works through this class will work through the bot bridge.
 """
 import shutil
 import subprocess

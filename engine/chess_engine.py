@@ -38,15 +38,38 @@ KNIGHT_DELTAS: tuple[tuple[int, int], ...] = (
 AI_PROMO_PIECES: dict[int, str] = {3: 'Q', 4: 'R', 5: 'B', 6: 'N'}
 AI_PROMO_CODES: dict[str, int] = {'Q': 3, 'R': 4, 'B': 5, 'N': 6}
 
-# Zobrist hashing tables
-_zobrist_rng = random.Random(20260716)
-_PIECE_CODES: tuple[str, ...] = (
-    'wP', 'wN', 'wB', 'wR', 'wQ', 'wK',
-    'bP', 'bN', 'bB', 'bR', 'bQ', 'bK'
+# Integer board encoding. An empty square is 0; White pieces are 1-6 and Black
+# 7-12, so `0 < piece < 7` tests colour and `PIECE_TYPE[piece]` recovers a
+# colour-independent 1-6 type index (used to key the PST and the move dispatch).
+# Switching the board from 'wP'/'--' strings to these ints removes string
+# indexing and comparison from every square test in the hot move-gen/eval loops.
+EMPTY = 0
+WP, WN, WB, WR, WQ, WK = 1, 2, 3, 4, 5, 6
+BP, BN, BB, BR, BQ, BK = 7, 8, 9, 10, 11, 12
+PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING = 1, 2, 3, 4, 5, 6
+PIECE_TYPE: tuple[int, ...] = (
+    0, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
+    PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
 )
-ZOBRIST_PIECES: dict[str, list[list[int]]] = {
+
+# Boundary conversions: FEN, SAN/UCI notation, and the GUI still speak the old
+# two-character codes, so convert only at those edges.
+CODE_TO_INT: dict[str, int] = {
+    '--': EMPTY,
+    'wP': WP, 'wN': WN, 'wB': WB, 'wR': WR, 'wQ': WQ, 'wK': WK,
+    'bP': BP, 'bN': BN, 'bB': BB, 'bR': BR, 'bQ': BQ, 'bK': BK,
+}
+INT_TO_CODE: dict[int, str] = {value: code for code, value in CODE_TO_INT.items()}
+
+# Promotion move-type code (3-6) -> piece-type int; make_ai_move adds a colour
+# offset (0 for White, 6 for Black) to land on the concrete piece int.
+AI_PROMO_TYPE: dict[int, int] = {3: QUEEN, 4: ROOK, 5: BISHOP, 6: KNIGHT}
+
+# Zobrist hashing tables, keyed by the integer piece code (1-12).
+_zobrist_rng = random.Random(20260716)
+ZOBRIST_PIECES: dict[int, list[list[int]]] = {
     piece: [[_zobrist_rng.getrandbits(64) for _ in range(8)] for _ in range(8)]
-    for piece in _PIECE_CODES
+    for piece in range(1, 13)
 }
 ZOBRIST_SIDE: int = _zobrist_rng.getrandbits(64)
 ZOBRIST_CASTLING: list[int] = [_zobrist_rng.getrandbits(64) for _ in range(16)]
@@ -98,7 +121,7 @@ class Move:
         self,
         start_sq: tuple[int, int],
         end_sq: tuple[int, int],
-        board: list[list[str]],
+        board: list[list[int]],
         move_type: str = 'normal',
         promotion_piece: str = 'Q'
     ) -> None:
@@ -131,7 +154,7 @@ class Move:
 
         if self.move_type == self.EN_PASSANT:
             # The captured piece in en passant is always the opposite color pawn
-            self.piece_captured = 'bP' if self.piece_moved == 'wP' else 'wP'
+            self.piece_captured = BP if self.piece_moved == WP else WP
 
         # Stores ambiguity notation context if evaluated during UI rendering
         self.disambiguation: str = ''
@@ -140,17 +163,17 @@ class Move:
         self.is_checkmate: bool = False
 
     @classmethod
-    def normal(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
+    def normal(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[int]]) -> 'Move':
         """Construct a standard normal move."""
         return cls(start_sq, end_sq, board, move_type=cls.NORMAL)
 
     @classmethod
-    def en_passant(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
+    def en_passant(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[int]]) -> 'Move':
         """Construct an en-passant capture move."""
         return cls(start_sq, end_sq, board, move_type=cls.EN_PASSANT)
 
     @classmethod
-    def castle(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[str]]) -> 'Move':
+    def castle(cls, start_sq: tuple[int, int], end_sq: tuple[int, int], board: list[list[int]]) -> 'Move':
         """Construct a castling move."""
         return cls(start_sq, end_sq, board, move_type=cls.CASTLE)
 
@@ -159,7 +182,7 @@ class Move:
             cls,
             start_sq: tuple[int, int],
             end_sq: tuple[int, int],
-            board: list[list[str]],
+            board: list[list[int]],
             promotion_piece: str = 'Q'
     ) -> 'Move':
         """Construct a pawn promotion move."""
@@ -172,7 +195,7 @@ class Move:
         )
 
     @classmethod
-    def from_ai_tuple(cls, move_tuple: tuple[int, int, int, int, int], board: list[list[str]]) -> 'Move':
+    def from_ai_tuple(cls, move_tuple: tuple[int, int, int, int, int], board: list[list[int]]) -> 'Move':
         """
         Rebuild a full Move object from a lightweight AI move tuple.
 
@@ -266,14 +289,14 @@ class Move:
             notation = ''
 
             # Non-pawn piece moves prefix the notation with their letter (N, B, R, Q, K)
-            if self.piece_moved[1] != 'P':
-                notation = self.piece_moved[1]
+            if PIECE_TYPE[self.piece_moved] != PAWN:
+                notation = INT_TO_CODE[self.piece_moved][1]
                 if self.disambiguation:
                     notation += self.disambiguation
 
             # Append capture indicator
-            if self.piece_captured != '--':
-                if self.piece_moved[1] == 'P':
+            if self.piece_captured != EMPTY:
+                if PIECE_TYPE[self.piece_moved] == PAWN:
                     notation += self.COLS_TO_FILES[self.start_col]
                 notation += 'x'
 
@@ -294,10 +317,6 @@ class Move:
     def get_uci_notation(self) -> str:
         """
         Construct the UCI coordinate notation for the move (e.g., 'e2e4', 'e7e8q').
-
-        AI_PLANNING: This is the notation format the Lichess Bot API and every
-        UCI-compatible chess GUI exchange moves in. The uci.py adapter relies
-        on this method to report the engine's chosen move.
 
         Returns
         -------
@@ -324,24 +343,25 @@ class GameState:
 
     def __init__(self) -> None:
         """Initialize the game state, placing pieces on their starting squares."""
-        self.board: list[list[str]] = [
-            ['bR', 'bN', 'bB', 'bQ', 'bK', 'bB', 'bN', 'bR'],
-            ['bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP'],
-            ['--', '--', '--', '--', '--', '--', '--', '--'],
-            ['--', '--', '--', '--', '--', '--', '--', '--'],
-            ['--', '--', '--', '--', '--', '--', '--', '--'],
-            ['--', '--', '--', '--', '--', '--', '--', '--'],
-            ['wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP'],
-            ['wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR'],
+        self.board: list[list[int]] = [
+            [BR, BN, BB, BQ, BK, BB, BN, BR],
+            [BP, BP, BP, BP, BP, BP, BP, BP],
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY],
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY],
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY],
+            [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY],
+            [WP, WP, WP, WP, WP, WP, WP, WP],
+            [WR, WN, WB, WQ, WK, WB, WN, WR],
         ]
         self.white_to_move = True
+        # Dispatch keyed by the 1-6 piece-type index (see PIECE_TYPE)
         self.move_functions = {
-            'P': self._get_pawn_moves,
-            'R': self._get_rook_moves,
-            'B': self._get_bishop_moves,
-            'N': self._get_knight_moves,
-            'Q': self._get_queen_moves,
-            'K': self._get_king_moves,
+            PAWN: self._get_pawn_moves,
+            ROOK: self._get_rook_moves,
+            BISHOP: self._get_bishop_moves,
+            KNIGHT: self._get_knight_moves,
+            QUEEN: self._get_queen_moves,
+            KING: self._get_king_moves,
         }
 
         # Current and home Kings' locations
@@ -356,8 +376,8 @@ class GameState:
         for row in range(8):
             for col in range(8):
                 piece = self.board[row][col]
-                if piece != '--':
-                    if piece[0] == 'w':
+                if piece != EMPTY:
+                    if piece < BP:
                         self.white_pieces.add((row, col))
                     else:
                         self.black_pieces.add((row, col))
@@ -436,7 +456,7 @@ class GameState:
         for row in range(8):
             for col in range(8):
                 piece = board[row][col]
-                if piece != '--':
+                if piece != EMPTY:
                     key ^= ZOBRIST_PIECES[piece][row][col]
 
         if not self.white_to_move:
@@ -476,14 +496,14 @@ class GameState:
         for row in range(8):
             for col in range(8):
                 piece = self.board[row][col]
-                if piece != '--':
-                    if piece[0] == 'w':
+                if piece != EMPTY:
+                    if piece < BP:
                         self.white_pieces.add((row, col))
-                        if piece[1] == 'K':
+                        if piece == WK:
                             self.white_king_location = (row, col)
                     else:
                         self.black_pieces.add((row, col))
-                        if piece[1] == 'K':
+                        if piece == BK:
                             self.black_king_location = (row, col)
 
         initial_state = self.get_board_state()
@@ -496,11 +516,6 @@ class GameState:
     def from_fen(cls, fen: str) -> 'GameState':
         """
         Build a GameState from a FEN (Forsyth-Edwards Notation) string.
-
-        AI_PLANNING: FEN parsing is a prerequisite for playing on Lichess.
-        The Lichess Bot API (and the UCI protocol) describe positions as
-        FEN + a list of UCI moves; uci.py uses this to synchronize the
-        engine with the server's game state.
 
         Parameters
         ----------
@@ -526,7 +541,7 @@ class GameState:
         halfmove = int(fields[4]) if len(fields) > 4 else 0
 
         gs = cls()
-        gs.board = [['--'] * 8 for _ in range(8)]
+        gs.board = [[EMPTY] * 8 for _ in range(8)]
         for row_index, rank_str in enumerate(placement.split('/')):
             col = 0
             for char in rank_str:
@@ -534,7 +549,7 @@ class GameState:
                     col += int(char)
                 else:
                     color = 'w' if char.isupper() else 'b'
-                    gs.board[row_index][col] = color + char.upper()
+                    gs.board[row_index][col] = CODE_TO_INT[color + char.upper()]
                     col += 1
 
         gs.white_to_move = side == 'w'
@@ -577,13 +592,14 @@ class GameState:
             empty_run = 0
             for col in range(8):
                 piece = self.board[row][col]
-                if piece == '--':
+                if piece == EMPTY:
                     empty_run += 1
                 else:
                     if empty_run:
                         rank += str(empty_run)
                         empty_run = 0
-                    rank += piece[1].upper() if piece[0] == 'w' else piece[1].lower()
+                    code = INT_TO_CODE[piece]
+                    rank += code[1] if piece < BP else code[1].lower()
             if empty_run:
                 rank += str(empty_run)
             rank_strings.append(rank)
@@ -652,7 +668,7 @@ class GameState:
                 valid_squares = set()
 
                 # If checking piece is a knight, block is impossible; must capture or move king
-                if piece_checking[1] == 'N':
+                if PIECE_TYPE[piece_checking] == KNIGHT:
                     valid_squares = {(check_row, check_col)}
                 else:
                     for i in range(1, 8):
@@ -665,11 +681,11 @@ class GameState:
                 for i in range(len(moves) - 1, -1, -1):
                     if for_ai:
                         start_row, start_col, end_row, end_col, _ = moves[i]
-                        if self.board[start_row][start_col][1] != 'K':
+                        if PIECE_TYPE[self.board[start_row][start_col]] != KING:
                             if (end_row, end_col) not in valid_squares:
                                 del moves[i]
                     else:
-                        if moves[i].piece_moved[1] != 'K':
+                        if PIECE_TYPE[moves[i].piece_moved] != KING:
                             if (moves[i].end_row, moves[i].end_col) not in valid_squares:
                                 del moves[i]
             else:  # Double check -> King is strictly forced to move
@@ -730,7 +746,7 @@ class GameState:
         if not for_ai and len(moves) > 0:
             move_map: dict[tuple, list[Move]] = {}
             for move in moves:
-                if move.piece_moved[1] != 'P':
+                if PIECE_TYPE[move.piece_moved] != PAWN:
                     key = (move.piece_moved, move.end_row, move.end_col)
                     if key not in move_map:
                         move_map[key] = []
@@ -769,46 +785,47 @@ class GameState:
         self.halfmove_clock_log.append(self.halfmove_clock)
 
         # Reset clock on pawn advances or active captures
-        if move.piece_moved[1] == 'P' or move.piece_captured != '--':
+        if PIECE_TYPE[move.piece_moved] == PAWN or move.piece_captured != EMPTY:
             self.halfmove_clock = 0
         else:
             self.halfmove_clock += 1
 
         self.enpassant_possible_log.append(self.enpassant_possible)
-        self.board[move.start_row][move.start_col] = '--'
+        self.board[move.start_row][move.start_col] = EMPTY
         self.board[move.end_row][move.end_col] = move.piece_moved
         self.move_log.append(move)
         self.white_to_move = not self.white_to_move
 
         # Maintain king location caches
-        if move.piece_moved == 'wK':
+        if move.piece_moved == WK:
             self.white_king_location = (move.end_row, move.end_col)
-        elif move.piece_moved == 'bK':
+        elif move.piece_moved == BK:
             self.black_king_location = (move.end_row, move.end_col)
 
         self._update_castle_rights(move)
 
         if move.move_type == Move.PROMOTION:
             promoted_piece = move.promotion_piece if move.promotion_piece else 'Q'
-            self.board[move.end_row][move.end_col] = move.piece_moved[0] + promoted_piece
+            color = 'w' if move.piece_moved < BP else 'b'
+            self.board[move.end_row][move.end_col] = CODE_TO_INT[color + promoted_piece]
 
         # Establish en-passant target square on double pawn moves
-        if move.piece_moved[1] == 'P' and abs(move.start_row - move.end_row) == 2:
+        if PIECE_TYPE[move.piece_moved] == PAWN and abs(move.start_row - move.end_row) == 2:
             self.enpassant_possible = ((move.start_row + move.end_row) // 2, move.end_col)
         else:
             self.enpassant_possible = None
 
         if move.move_type == Move.EN_PASSANT:
-            self.board[move.start_row][move.end_col] = '--'
+            self.board[move.start_row][move.end_col] = EMPTY
 
         # Reposition the rook during a castle move
         if move.move_type == Move.CASTLE:
             if move.end_col - move.start_col == 2:  # King side
                 self.board[move.end_row][move.end_col - 1] = self.board[move.end_row][move.end_col + 1]
-                self.board[move.end_row][move.end_col + 1] = '--'
+                self.board[move.end_row][move.end_col + 1] = EMPTY
             else:  # Queen side
                 self.board[move.end_row][move.end_col + 1] = self.board[move.end_row][move.end_col - 2]
-                self.board[move.end_row][move.end_col - 2] = '--'
+                self.board[move.end_row][move.end_col - 2] = EMPTY
 
         # Keep active piece sets updated
         _is_white_moved = not self.white_to_move
@@ -818,7 +835,7 @@ class GameState:
         friendly_pieces.remove((move.start_row, move.start_col))
         friendly_pieces.add((move.end_row, move.end_col))
 
-        if move.piece_captured != '--':
+        if move.piece_captured != EMPTY:
             if move.move_type == Move.EN_PASSANT:
                 enemy_pieces.remove((move.start_row, move.end_col))
             else:
@@ -872,13 +889,13 @@ class GameState:
         self.board[last_move.end_row][last_move.end_col] = last_move.piece_captured
         self.white_to_move = not self.white_to_move
 
-        if last_move.piece_moved == 'wK':
+        if last_move.piece_moved == WK:
             self.white_king_location = (last_move.start_row, last_move.start_col)
-        elif last_move.piece_moved == 'bK':
+        elif last_move.piece_moved == BK:
             self.black_king_location = (last_move.start_row, last_move.start_col)
 
         if last_move.move_type == Move.EN_PASSANT:
-            self.board[last_move.end_row][last_move.end_col] = '--'
+            self.board[last_move.end_row][last_move.end_col] = EMPTY
             self.board[last_move.start_row][last_move.end_col] = last_move.piece_captured
 
         self.enpassant_possible = self.enpassant_possible_log.pop()
@@ -895,10 +912,10 @@ class GameState:
         if last_move.move_type == Move.CASTLE:
             if last_move.end_col - last_move.start_col == 2:  # King side
                 self.board[last_move.end_row][last_move.end_col + 1] = self.board[last_move.end_row][last_move.end_col - 1]
-                self.board[last_move.end_row][last_move.end_col - 1] = '--'
+                self.board[last_move.end_row][last_move.end_col - 1] = EMPTY
             else:  # Queen side
                 self.board[last_move.end_row][last_move.end_col - 2] = self.board[last_move.end_row][last_move.end_col + 1]
-                self.board[last_move.end_row][last_move.end_col + 1] = '--'
+                self.board[last_move.end_row][last_move.end_col + 1] = EMPTY
 
         # Restore pieces' tracking sets
         friendly_pieces = self.white_pieces if self.white_to_move else self.black_pieces
@@ -907,7 +924,7 @@ class GameState:
         friendly_pieces.remove((last_move.end_row, last_move.end_col))
         friendly_pieces.add((last_move.start_row, last_move.start_col))
 
-        if last_move.piece_captured != '--':
+        if last_move.piece_captured != EMPTY:
             if last_move.move_type == Move.EN_PASSANT:
                 enemy_pieces.add((last_move.start_row, last_move.end_col))
             else:
@@ -949,7 +966,7 @@ class GameState:
     def make_ai_move(
             self,
             move_tuple: tuple[int, int, int, int, int]
-    ) -> tuple[str, tuple[int, int] | None, tuple[bool, bool, bool, bool], int]:
+    ) -> tuple[int, tuple[int, int] | None, tuple[bool, bool, bool, bool], int]:
         """
         Execute a lightweight move specifically optimized for AI search trees.
 
@@ -984,22 +1001,22 @@ class GameState:
         old_zobrist = self.zobrist_key
         old_rights_index = self._castle_rights_index()
 
-        is_white = piece_moved[0] == 'w'
+        is_white = piece_moved < BP
         friendly_pieces = self.white_pieces if is_white else self.black_pieces
         enemy_pieces = self.black_pieces if is_white else self.white_pieces
 
-        board[start_row][start_col] = '--'
+        board[start_row][start_col] = EMPTY
         board[end_row][end_col] = piece_moved
         friendly_pieces.remove((start_row, start_col))
         friendly_pieces.add((end_row, end_col))
 
         key = old_zobrist ^ ZOBRIST_PIECES[piece_moved][start_row][start_col]
 
-        if piece_moved == 'wK':
+        if piece_moved == WK:
             self.white_king_location = (end_row, end_col)
             self.white_castle_king_side = False
             self.white_castle_queen_side = False
-        elif piece_moved == 'bK':
+        elif piece_moved == BK:
             self.black_king_location = (end_row, end_col)
             self.black_castle_king_side = False
             self.black_castle_queen_side = False
@@ -1008,46 +1025,46 @@ class GameState:
             if end_col - start_col == 2:  # King side
                 rook = board[end_row][end_col + 1]
                 board[end_row][end_col - 1] = rook
-                board[end_row][end_col + 1] = '--'
+                board[end_row][end_col + 1] = EMPTY
                 friendly_pieces.remove((end_row, end_col + 1))
                 friendly_pieces.add((end_row, end_col - 1))
                 key ^= ZOBRIST_PIECES[rook][end_row][end_col + 1] ^ ZOBRIST_PIECES[rook][end_row][end_col - 1]
             else:  # Queen side
                 rook = board[end_row][end_col - 2]
                 board[end_row][end_col + 1] = rook
-                board[end_row][end_col - 2] = '--'
+                board[end_row][end_col - 2] = EMPTY
                 friendly_pieces.remove((end_row, end_col - 2))
                 friendly_pieces.add((end_row, end_col + 1))
                 key ^= ZOBRIST_PIECES[rook][end_row][end_col - 2] ^ ZOBRIST_PIECES[rook][end_row][end_col + 1]
             key ^= ZOBRIST_PIECES[piece_moved][end_row][end_col]
 
         elif move_type == 2:  # En Passant
-            board[start_row][end_col] = '--'
-            captured_piece = 'bP' if is_white else 'wP'
+            board[start_row][end_col] = EMPTY
+            captured_piece = BP if is_white else WP
             enemy_pieces.remove((start_row, end_col))
             key ^= ZOBRIST_PIECES[captured_piece][start_row][end_col]
             key ^= ZOBRIST_PIECES[piece_moved][end_row][end_col]
 
         elif move_type >= 3:  # Promotions
-            promoted = piece_moved[0] + AI_PROMO_PIECES[move_type]
+            promoted = AI_PROMO_TYPE[move_type] + (0 if is_white else 6)
             board[end_row][end_col] = promoted
-            if captured_piece != '--':
+            if captured_piece != EMPTY:
                 enemy_pieces.remove((end_row, end_col))
                 key ^= ZOBRIST_PIECES[captured_piece][end_row][end_col]
             key ^= ZOBRIST_PIECES[promoted][end_row][end_col]
 
         else:  # Normal moves
-            if captured_piece != '--':
+            if captured_piece != EMPTY:
                 enemy_pieces.remove((end_row, end_col))
                 key ^= ZOBRIST_PIECES[captured_piece][end_row][end_col]
             key ^= ZOBRIST_PIECES[piece_moved][end_row][end_col]
 
-        if piece_moved[1] == 'P' and abs(start_row - end_row) == 2:
+        if PIECE_TYPE[piece_moved] == PAWN and abs(start_row - end_row) == 2:
             self.enpassant_possible = ((start_row + end_row) // 2, end_col)
         else:
             self.enpassant_possible = None
 
-        if piece_moved[1] == 'R':
+        if PIECE_TYPE[piece_moved] == ROOK:
             if start_row == 7:
                 if start_col == 0: self.white_castle_queen_side = False
                 elif start_col == 7: self.white_castle_king_side = False
@@ -1055,7 +1072,7 @@ class GameState:
                 if start_col == 0: self.black_castle_queen_side = False
                 elif start_col == 7: self.black_castle_king_side = False
 
-        if captured_piece != '--' and captured_piece[1] == 'R':
+        if captured_piece != EMPTY and PIECE_TYPE[captured_piece] == ROOK:
             if end_row == 7:
                 if end_col == 0: self.white_castle_queen_side = False
                 elif end_col == 7: self.white_castle_king_side = False
@@ -1081,7 +1098,7 @@ class GameState:
     def unmake_ai_move(
             self,
             move_tuple: tuple[int, int, int, int, int],
-            undo_package: tuple[str, tuple[int, int] | None, tuple[bool, bool, bool, bool], int]
+            undo_package: tuple[int, tuple[int, int] | None, tuple[bool, bool, bool, bool], int]
     ) -> None:
         """
         Reverse state changes made by `make_ai_move` directly using primitive data.
@@ -1100,10 +1117,10 @@ class GameState:
         self.white_to_move = not self.white_to_move
         piece_moved = board[end_row][end_col]
 
-        if move_type >= 3:  # Promotion
-            piece_moved = piece_moved[0] + 'P'
+        if move_type >= 3:  # Promotion: the piece that moved was a pawn
+            piece_moved = WP if piece_moved < BP else BP
 
-        is_white = piece_moved[0] == 'w'
+        is_white = piece_moved < BP
         friendly_pieces = self.white_pieces if is_white else self.black_pieces
         enemy_pieces = self.black_pieces if is_white else self.white_pieces
 
@@ -1112,29 +1129,29 @@ class GameState:
         friendly_pieces.add((start_row, start_col))
 
         if move_type == 2:  # En Passant
-            board[end_row][end_col] = '--'
+            board[end_row][end_col] = EMPTY
             board[start_row][end_col] = captured_piece
             enemy_pieces.add((start_row, end_col))
         else:
             board[end_row][end_col] = captured_piece
-            if captured_piece != '--':
+            if captured_piece != EMPTY:
                 enemy_pieces.add((end_row, end_col))
 
         if move_type == 1:  # Castle
             if end_col - start_col == 2:
                 board[end_row][end_col + 1] = board[end_row][end_col - 1]
-                board[end_row][end_col - 1] = '--'
+                board[end_row][end_col - 1] = EMPTY
                 friendly_pieces.remove((end_row, end_col - 1))
                 friendly_pieces.add((end_row, end_col + 1))
             else:
                 board[end_row][end_col - 2] = board[end_row][end_col + 1]
-                board[end_row][end_col + 1] = '--'
+                board[end_row][end_col + 1] = EMPTY
                 friendly_pieces.remove((end_row, end_col + 1))
                 friendly_pieces.add((end_row, end_col - 2))
 
-        if piece_moved == 'wK':
+        if piece_moved == WK:
             self.white_king_location = (start_row, start_col)
-        elif piece_moved == 'bK':
+        elif piece_moved == BK:
             self.black_king_location = (start_row, start_col)
 
         self.enpassant_possible = old_enpassant
@@ -1189,9 +1206,9 @@ class GameState:
         move_functions = self.move_functions
 
         for row, col in active_pieces:
-            piece = board[row][col][1]
-            move_functions[piece](row, col, possible_moves, for_ai, captures_only)
-            if piece == 'K' and not captures_only:  # castling is never a capture
+            piece_type = PIECE_TYPE[board[row][col]]
+            move_functions[piece_type](row, col, possible_moves, for_ai, captures_only)
+            if piece_type == KING and not captures_only:  # castling is never a capture
                 self._get_castle_moves(row, col, possible_moves, for_ai)
         return possible_moves
 
@@ -1213,8 +1230,17 @@ class GameState:
         in_check = False
         row, col = self.white_king_location if self.white_to_move else self.black_king_location
         board = self.board
-        friendly_color = 'w' if self.white_to_move else 'b'
-        enemy_color = 'b' if self.white_to_move else 'w'
+        white = self.white_to_move
+        # Friendly pieces occupy one 1-6/7-12 band, the enemy the other; empty
+        # squares (0) fall in neither. `enemy_is_black` selects the pawn-attack
+        # directions, and `enemy_knight` is the single enemy knight code.
+        if white:
+            friendly_lo, friendly_hi, enemy_lo, enemy_hi = WP, WK, BP, BK
+            enemy_knight = BN
+        else:
+            friendly_lo, friendly_hi, enemy_lo, enemy_hi = BP, BK, WP, WK
+            enemy_knight = WN
+        enemy_is_black = white
 
         for i, d in enumerate(ALL_DIRECTIONS):
             possible_pins: tuple = ()
@@ -1225,27 +1251,27 @@ class GameState:
                     end_piece = board[end_row][end_col]
 
                     # Ignore moving phantom King to prevent false blocks
-                    if end_piece[0] == friendly_color and end_piece[1] != 'K':
+                    if friendly_lo <= end_piece <= friendly_hi and PIECE_TYPE[end_piece] != KING:
                         if len(possible_pins) == 0:
                             possible_pins = (end_row, end_col, d[0], d[1])
                         else:
                             break
-                    elif end_piece[0] == enemy_color:
-                        enemy_piece_type = end_piece[1]
+                    elif enemy_lo <= end_piece <= enemy_hi:
+                        enemy_piece_type = PIECE_TYPE[end_piece]
 
                         if (
-                            (0 <= i <= 3 and enemy_piece_type == 'R')
-                            or (4 <= i <= 7 and enemy_piece_type == 'B')
+                            (0 <= i <= 3 and enemy_piece_type == ROOK)
+                            or (4 <= i <= 7 and enemy_piece_type == BISHOP)
                             or (
                                 j == 1
                                 and (
-                                        (enemy_color == 'b' and 4 <= i <= 5)
-                                        or (enemy_color == 'w' and 6 <= i <= 7)
+                                        (enemy_is_black and 4 <= i <= 5)
+                                        or (not enemy_is_black and 6 <= i <= 7)
                                 )
-                                and enemy_piece_type == 'P'
+                                and enemy_piece_type == PAWN
                             )
-                            or (enemy_piece_type == 'Q')
-                            or (j == 1 and enemy_piece_type == 'K')
+                            or (enemy_piece_type == QUEEN)
+                            or (j == 1 and enemy_piece_type == KING)
                         ):
                             if len(possible_pins) == 0:
                                 in_check = True
@@ -1264,8 +1290,7 @@ class GameState:
             end_row = row + move[0]
             end_col = col + move[1]
             if 0 <= end_row < 8 and 0 <= end_col < 8:
-                end_piece = board[end_row][end_col]
-                if end_piece[0] == enemy_color and end_piece[1] == 'N':
+                if board[end_row][end_col] == enemy_knight:
                     in_check = True
                     checks.append((end_row, end_col, move[0], move[1]))
                     break
@@ -1277,9 +1302,15 @@ class GameState:
         Determine if a specific square is under attack by any enemy piece.
         Optimized for generating legal king bounds quickly.
         """
-        enemy_color = 'b' if self.white_to_move else 'w'
-        friendly_color = 'w' if self.white_to_move else 'b'
         board = self.board
+        white = self.white_to_move
+        if white:
+            friendly_lo, friendly_hi, enemy_lo, enemy_hi = WP, WK, BP, BK
+            enemy_knight = BN
+        else:
+            friendly_lo, friendly_hi, enemy_lo, enemy_hi = BP, BK, WP, WK
+            enemy_knight = WN
+        enemy_is_black = white
 
         for i, d in enumerate(ALL_DIRECTIONS):
             for j in range(1, 8):
@@ -1288,22 +1319,22 @@ class GameState:
                 if 0 <= end_row < 8 and 0 <= end_col < 8:
                     end_piece = board[end_row][end_col]
 
-                    if end_piece[0] == friendly_color and end_piece[1] != 'K':
+                    if friendly_lo <= end_piece <= friendly_hi and PIECE_TYPE[end_piece] != KING:
                         break
-                    elif end_piece[0] == enemy_color:
-                        enemy_piece_type = end_piece[1]
+                    elif enemy_lo <= end_piece <= enemy_hi:
+                        enemy_piece_type = PIECE_TYPE[end_piece]
 
-                        if 0 <= i <= 3 and enemy_piece_type in ('R', 'Q'):
+                        if 0 <= i <= 3 and enemy_piece_type in (ROOK, QUEEN):
                             return True
-                        elif 4 <= i <= 7 and enemy_piece_type in ('B', 'Q'):
+                        elif 4 <= i <= 7 and enemy_piece_type in (BISHOP, QUEEN):
                             return True
-                        elif j == 1 and enemy_piece_type == 'P':
-                            if enemy_color == 'b' and 4 <= i <= 5: return True
-                            elif enemy_color == 'w' and 6 <= i <= 7: return True
+                        elif j == 1 and enemy_piece_type == PAWN:
+                            if enemy_is_black and 4 <= i <= 5: return True
+                            elif not enemy_is_black and 6 <= i <= 7: return True
                             # A pawn that does not attack this square still
                             # blocks the ray for any slider behind it
                             break
-                        elif j == 1 and enemy_piece_type == 'K':
+                        elif j == 1 and enemy_piece_type == KING:
                             return True
                         else:
                             break
@@ -1314,8 +1345,7 @@ class GameState:
             end_row = row + m[0]
             end_col = col + m[1]
             if 0 <= end_row < 8 and 0 <= end_col < 8:
-                end_piece = board[end_row][end_col]
-                if end_piece[0] == enemy_color and end_piece[1] == 'N':
+                if board[end_row][end_col] == enemy_knight:
                     return True
 
         return False
@@ -1360,10 +1390,10 @@ class GameState:
 
         # Pushes are quiet moves — except a push to the back row, which is a
         # promotion and therefore "noisy" even for a captures-only caller
-        if self.board[row + move_amount][col] == '--' and (not captures_only or _is_back_row):
+        if self.board[row + move_amount][col] == EMPTY and (not captures_only or _is_back_row):
             if not piece_pinned or pin_direction == (-1, 0) or pin_direction == (1, 0):
                 _add_move(row + move_amount, col)
-                if row == start_row and self.board[row + 2 * move_amount][col] == '--':
+                if row == start_row and self.board[row + 2 * move_amount][col] == EMPTY:
                     if for_ai:
                         possible_moves.append((row, col, row + 2 * move_amount, col, 0))
                     else:
@@ -1376,7 +1406,8 @@ class GameState:
             if 0 <= new_col < 8:
                 if not piece_pinned or pin_direction == (move_amount, col_offset):
                     end_piece = self.board[row + move_amount][new_col]
-                    if end_piece[0] == self.enemy_color:
+                    enemy_lo, enemy_hi = (BP, BK) if self.white_to_move else (WP, WK)
+                    if enemy_lo <= end_piece <= enemy_hi:
                         _add_move(row + move_amount, new_col)
 
                     if (row + move_amount, new_col) == self.enpassant_possible:
@@ -1426,7 +1457,7 @@ class GameState:
             pin_direction = self.pins[(row, col)]
 
         board = self.board
-        enemy_color = 'b' if self.white_to_move else 'w'
+        enemy_lo, enemy_hi = (BP, BK) if self.white_to_move else (WP, WK)
 
         for d in directions:
             # Skip whole rays early when pinned off-axis (saves the inner loop)
@@ -1440,7 +1471,7 @@ class GameState:
                 end_col += d[1]
                 if 0 <= end_row < 8 and 0 <= end_col < 8:
                     end_piece = board[end_row][end_col]
-                    if end_piece == '--':
+                    if end_piece == EMPTY:
                         # Quiet slide: skip the append for captures-only
                         # callers but keep walking the ray toward a capture
                         if not captures_only:
@@ -1448,7 +1479,7 @@ class GameState:
                                 possible_moves.append((row, col, end_row, end_col, 0))
                             else:
                                 possible_moves.append(Move.normal((row, col), (end_row, end_col), board))
-                    elif end_piece[0] == enemy_color:
+                    elif enemy_lo <= end_piece <= enemy_hi:
                         if for_ai:
                             possible_moves.append((row, col, end_row, end_col, 0))
                         else:
@@ -1469,14 +1500,14 @@ class GameState:
             return
 
         board = self.board
-        enemy_color = 'b' if self.white_to_move else 'w'
+        enemy_lo, enemy_hi = (BP, BK) if self.white_to_move else (WP, WK)
 
         for move in KNIGHT_DELTAS:
             end_row = row + move[0]
             end_col = col + move[1]
             if 0 <= end_row < 8 and 0 <= end_col < 8:
                 end_piece = board[end_row][end_col]
-                if end_piece[0] == enemy_color or (end_piece == '--' and not captures_only):
+                if (enemy_lo <= end_piece <= enemy_hi) or (end_piece == EMPTY and not captures_only):
                     if for_ai:
                         possible_moves.append((row, col, end_row, end_col, 0))
                     else:
@@ -1488,7 +1519,7 @@ class GameState:
     ) -> None:
         """Get all pseudo-legal normal moves for a king validating safe surrounding squares."""
         board = self.board
-        enemy_color = 'b' if self.white_to_move else 'w'
+        enemy_lo, enemy_hi = (BP, BK) if self.white_to_move else (WP, WK)
 
         for d in ALL_DIRECTIONS:
             end_row = row + d[0]
@@ -1497,7 +1528,7 @@ class GameState:
                 end_piece = board[end_row][end_col]
                 # The captures-only test runs before the attack scan: skipping
                 # quiet squares early also skips their _is_square_attacked cost
-                if end_piece[0] == enemy_color or (end_piece == '--' and not captures_only):
+                if (enemy_lo <= end_piece <= enemy_hi) or (end_piece == EMPTY and not captures_only):
                     if not self._is_square_attacked(end_row, end_col):
                         if for_ai:
                             possible_moves.append((row, col, end_row, end_col, 0))
@@ -1515,11 +1546,11 @@ class GameState:
         from attack.
         """
         if self.white_to_move:
-            home, rook = 7, 'wR'
+            home, rook = 7, WR
             home_square = self.WHITE_KING_HOME_SQUARE
             king_side, queen_side = self.white_castle_king_side, self.white_castle_queen_side
         else:
-            home, rook = 0, 'bR'
+            home, rook = 0, BR
             home_square = self.BLACK_KING_HOME_SQUARE
             king_side, queen_side = self.black_castle_king_side, self.black_castle_queen_side
 
@@ -1529,7 +1560,7 @@ class GameState:
 
         if (
             king_side
-            and board[home][5] == '--' and board[home][6] == '--'
+            and board[home][5] == EMPTY and board[home][6] == EMPTY
             and board[home][7] == rook
             and self._squares_safe_for_castle([(home, 4), (home, 5), (home, 6)])
         ):
@@ -1540,7 +1571,7 @@ class GameState:
 
         if (
             queen_side
-            and board[home][1] == '--' and board[home][2] == '--' and board[home][3] == '--'
+            and board[home][1] == EMPTY and board[home][2] == EMPTY and board[home][3] == EMPTY
             and board[home][0] == rook
             and self._squares_safe_for_castle([(home, 4), (home, 3), (home, 2)])
         ):
@@ -1558,26 +1589,26 @@ class GameState:
 
     def _update_castle_rights(self, move: 'Move') -> None:
         """Update castling privileges after kings or rooks abandon initial squares."""
-        if move.piece_moved == 'wK':
+        if move.piece_moved == WK:
             self.white_castle_king_side = False
             self.white_castle_queen_side = False
-        elif move.piece_moved == 'bK':
+        elif move.piece_moved == BK:
             self.black_castle_king_side = False
             self.black_castle_queen_side = False
-        elif move.piece_moved == 'wR':
+        elif move.piece_moved == WR:
             if move.start_row == 7:
                 if move.start_col == 0: self.white_castle_queen_side = False
                 elif move.start_col == 7: self.white_castle_king_side = False
-        elif move.piece_moved == 'bR':
+        elif move.piece_moved == BR:
             if move.start_row == 0:
                 if move.start_col == 0: self.black_castle_queen_side = False
                 elif move.start_col == 7: self.black_castle_king_side = False
 
-        if move.piece_captured == 'wR':
+        if move.piece_captured == WR:
             if move.end_row == 7:
                 if move.end_col == 0: self.white_castle_queen_side = False
                 elif move.end_col == 7: self.white_castle_king_side = False
-        elif move.piece_captured == 'bR':
+        elif move.piece_captured == BR:
             if move.end_row == 0:
                 if move.end_col == 0: self.black_castle_queen_side = False
                 elif move.end_col == 7: self.black_castle_king_side = False

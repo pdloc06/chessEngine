@@ -5,7 +5,7 @@ moves, FEN round trips, and AI tuple <-> Move conversions.
 """
 import random
 
-from engine.chess_engine import GameState, Move
+from engine.chess_engine import GameState, Move, PIECE_TYPE, EMPTY, KING, WP, WR, WK, BP
 
 START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
@@ -30,8 +30,8 @@ def pieces_from_board(gs: GameState) -> tuple[set[tuple[int, int]], set[tuple[in
     for r in range(8):
         for c in range(8):
             piece = gs.board[r][c]
-            if piece != '--':
-                (white if piece[0] == 'w' else black).add((r, c))
+            if piece != EMPTY:
+                (white if piece < BP else black).add((r, c))
     return white, black
 
 
@@ -69,7 +69,7 @@ def test_king_can_step_beside_blocked_enemy_pawn():
     king_moves = {
         Move.from_ai_tuple(move, gs.board).get_uci_notation()
         for move in gs.get_valid_moves(for_ai=True)
-        if gs.board[move[0]][move[1]][1] == 'K'
+        if PIECE_TYPE[gs.board[move[0]][move[1]]] == KING
     }
     assert king_moves == {'e2d3', 'e2e1', 'e2f3'}
 
@@ -122,11 +122,11 @@ def test_ai_castle_move_updates_rook_tracking(custom_gs):
     castle_tuple = (7, 4, 7, 6, 1)  # O-O
     undo = gs.make_ai_move(castle_tuple)
     assert (gs.white_pieces, gs.black_pieces) == pieces_from_board(gs)
-    assert gs.board[7][5] == 'wR' and gs.board[7][6] == 'wK'
+    assert gs.board[7][5] == WR and gs.board[7][6] == WK
 
     gs.unmake_ai_move(castle_tuple, undo)
     assert (gs.white_pieces, gs.black_pieces) == pieces_from_board(gs)
-    assert gs.board[7][7] == 'wR' and gs.board[7][4] == 'wK'
+    assert gs.board[7][7] == WR and gs.board[7][4] == WK
 
 
 # --- Null moves ---
@@ -229,7 +229,7 @@ def test_uci_notation(gs):
     """Verify UCI coordinate output, including the promotion suffix."""
     assert Move.normal((6, 4), (4, 4), gs.board).get_uci_notation() == 'e2e4'
 
-    empty_board = [['--' for _ in range(8)] for _ in range(8)]
-    empty_board[1][0] = 'wP'
+    empty_board = [[EMPTY for _ in range(8)] for _ in range(8)]
+    empty_board[1][0] = WP
     promo = Move.promotion((1, 0), (0, 0), empty_board, promotion_piece='N')
     assert promo.get_uci_notation() == 'a7a8n'

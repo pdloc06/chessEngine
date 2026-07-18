@@ -5,7 +5,9 @@ UCI adapter helpers.
 """
 from engine import move_finder
 from engine import uci
-from engine.chess_engine import GameState, Move
+from engine.chess_engine import (
+    GameState, Move, PAWN, BISHOP, WP, WN, WB, BP,
+)
 
 
 # --- Search finds forced wins ---
@@ -40,6 +42,81 @@ def test_avoids_losing_queen_to_recapture():
     best = move_finder.find_best_move(gs, max_depth=3, time_limit=10.0)
     assert best is not None
     assert (best[2], best[3]) != (3, 3)
+
+
+# --- Search-strength regressions (guard LMR / aspiration / SEE) ---
+def test_finds_mate_via_quiet_key_move():
+    """Verify the search still finds a forced mate whose first move is quiet.
+
+    Two rooks vs a lone king: the only path to mate is a *quiet* rook lift
+    (1.Ra7, threatening 2.Rb8#) — no capture, no check. That is exactly the
+    kind of move late-move reductions search shallower, so this position is the
+    canary that LMR (and later pruning) never reduce a mating idea out of view.
+    """
+    gs = GameState.from_fen('7k/8/8/8/8/8/R7/1R5K w - - 0 1')
+    move, score = move_finder.search_position(gs, max_depth=4, time_limit=10.0)
+    assert move is not None
+    assert score >= move_finder.MATE_THRESHOLD
+
+
+def test_finds_knight_fork_winning_queen():
+    """Verify a depth-reachable fork that wins material is still found.
+
+    Black's knight on d4 forks the white king on g1 and queen on e1 with
+    Nf3+; the material swing only shows up a few plies deep, past where LMR
+    starts reducing quiet moves.
+    """
+    gs = GameState.from_fen('6k1/8/8/8/3n4/8/8/4Q1K1 b - - 0 1')
+    best = move_finder.find_best_move(gs, max_depth=4, time_limit=10.0)
+    assert best is not None
+    assert Move.from_ai_tuple(best, gs.board).get_uci_notation() == 'd4f3'
+
+
+def test_aspiration_widens_on_large_swing():
+    """Verify a winning move far outside the aspiration window is still found.
+
+    The fork wins a whole queen — a score jump of hundreds of centipawns, well
+    past ASPIRATION_DELTA — so at a deep iteration the narrow window fails high
+    and must widen and re-search to surface the move. Searching to depth 5 runs
+    several aspiration iterations, exercising that widen-and-retry path.
+    """
+    gs = GameState.from_fen('6k1/8/8/8/3n4/8/8/4Q1K1 b - - 0 1')
+    best = move_finder.find_best_move(gs, max_depth=5, time_limit=15.0)
+    assert best is not None
+    assert Move.from_ai_tuple(best, gs.board).get_uci_notation() == 'd4f3'
+
+
+# --- Static exchange evaluation ---
+def _see_of(fen, uci):
+    """Helper: the SEE value of the move written in UCI from the given FEN."""
+    gs = GameState.from_fen(fen)
+    move = next(
+        m for m in gs.get_valid_moves(for_ai=True)
+        if Move.from_ai_tuple(m, gs.board).get_uci_notation() == uci
+    )
+    return move_finder._see(gs, move)
+
+
+def test_see_wins_undefended_pawn():
+    """Verify capturing an undefended pawn nets its full value."""
+    assert _see_of('6k1/8/8/3p4/8/3R4/8/6K1 w - - 0 1', 'd3d5') == 100
+
+
+def test_see_loses_queen_for_defended_pawn():
+    """Verify taking a defended pawn with the queen scores the net loss."""
+    # Black pawn d5 is defended by the e6 pawn: Qxd5 wins a pawn but loses the
+    # queen to the recapture, netting 100 - 900 = -800.
+    assert _see_of('6k1/8/4p3/3p4/8/8/3Q4/6K1 w - - 0 1', 'd2d5') == -800
+
+
+def test_see_counts_xray_recapture():
+    """Verify the swap-off reveals a second rook stacked behind the first.
+
+    Rd3 takes the pawn on d5 (defended by e6); after ...exd5 the *back* rook on
+    d2 X-rays through the now-vacated d3 to recapture. White ends up trading a
+    rook for two pawns: 100 - 500 + 100 = -300.
+    """
+    assert _see_of('6k1/8/4p3/3p4/8/3R4/3R4/6K1 w - - 0 1', 'd3d5') == -300
 
 
 # --- Search interface behavior ---
@@ -97,9 +174,9 @@ def test_search_position_reports_score(gs):
 def test_uci_build_position_startpos_with_moves():
     """Verify 'position startpos moves ...' replays UCI moves correctly."""
     gs = uci.build_position(['startpos', 'moves', 'e2e4', 'e7e5', 'g1f3'])
-    assert gs.board[4][4] == 'wP'  # e4
-    assert gs.board[3][4] == 'bP'  # e5
-    assert gs.board[5][5] == 'wN'  # Nf3
+    assert gs.board[4][4] == WP  # e4
+    assert gs.board[3][4] == BP  # e5
+    assert gs.board[5][5] == WN  # Nf3
     assert gs.white_to_move is False
 
 
@@ -166,7 +243,7 @@ def test_bishop_pair_bonus(custom_gs):
     empty_board[4][5] = 'wB'
     two_bishops = move_finder.evaluate(custom_gs([row[:] for row in empty_board]))
 
-    expected_gain = (move_finder.PIECE_VALUES['B'] + move_finder.PST['B'][4][5]
+    expected_gain = (move_finder.PIECE_VALUES[WB] + move_finder.PST[BISHOP][4][5]
                      + move_finder.BISHOP_PAIR_BONUS)
     assert two_bishops - one_bishop == expected_gain
 
@@ -185,7 +262,7 @@ def test_passed_pawn_bonus(custom_gs):
 
     # The delta is the black pawn's own value/PST plus the lost passed bonus
     # (the d6 pawn itself is not passed: the e5 pawn stands ahead of it)
-    expected_delta = (move_finder.PIECE_VALUES['P'] + move_finder.PST['P'][5][3]
+    expected_delta = (move_finder.PIECE_VALUES[WP] + move_finder.PST[PAWN][5][3]
                       + move_finder.PASSED_PAWN_BONUS[3])
     assert passed - blocked == expected_delta
 
@@ -215,7 +292,7 @@ def test_king_pawn_shield_bonus(custom_gs):
     shielded = move_finder.evaluate(custom_gs(shielded_board))
     advanced = move_finder.evaluate(custom_gs(advanced_board))
 
-    expected_delta = (move_finder.PST['P'][6][6] - move_finder.PST['P'][4][6]
+    expected_delta = (move_finder.PST[PAWN][6][6] - move_finder.PST[PAWN][4][6]
                       + move_finder.KING_SHIELD_BONUS)
     assert shielded - advanced == expected_delta
 
@@ -235,6 +312,23 @@ def test_persistent_tt_reused_across_searches(gs):
     second = move_finder.find_best_move(gs, max_depth=3, time_limit=10.0, tt=tt)
     assert second in gs.get_valid_moves(for_ai=True)
     assert len(tt) >= size_after_first
+
+
+def test_tt_entries_carry_generation_and_age(gs):
+    """Verify each TT entry stamps its search generation and that a later,
+    deeper search ages entries forward (the replacement policy's aging)."""
+    tt: move_finder.TTable = {}
+    move_finder.find_best_move(gs, max_depth=3, time_limit=10.0, tt=tt)
+    assert all(len(entry) == 5 for entry in tt.values())
+    gen_first = max(entry[4] for entry in tt.values())
+
+    # Re-search deeper so cached entries are re-stored rather than merely hit;
+    # the deeper results carry the newer generation, letting stale entries from
+    # earlier moves lose ties and age out over the course of a game.
+    move_finder.find_best_move(gs, max_depth=4, time_limit=10.0, tt=tt)
+    gen_second = max(entry[4] for entry in tt.values())
+    assert gen_second > gen_first
+    assert any(entry[4] == gen_second for entry in tt.values())
 
 
 def test_uci_go_fills_and_newgame_clears_the_tt():

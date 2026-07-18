@@ -12,11 +12,6 @@ Run it from the project root and type commands, or point a GUI/bridge at it:
 Supported commands: `uci`, `isready`, `ucinewgame`,
 `position startpos|fen <fen> [moves <uci>...]`,
 `go [depth N] [movetime MS] [wtime MS btime MS winc MS binc MS]`, `quit`.
-
-AI_PLANNING: This file is step 2 of the Lichess roadmap (see
-LICHESS_BOT_PLAN.md), plus step 5's clock-aware time management
-(`parse_go_limits`/`clock_move_budget`). The marked extension points cover
-pondering and configurable options for stronger online play.
 """
 import sys
 
@@ -239,8 +234,6 @@ def main() -> None:
         if command == 'uci':
             print(f'id name {ENGINE_NAME}')
             print(f'id author {ENGINE_AUTHOR}')
-            # AI_PLANNING: declare configurable options here with 'option name
-            # ... type ...' lines (hash size, skill level) once supported
             print('uciok')
 
         elif command == 'isready':
@@ -263,10 +256,6 @@ def main() -> None:
 
         elif command == 'quit':
             break
-
-        # AI_PLANNING: implement 'stop' (abort an async search and answer with
-        # the best move so far) and 'ponderhit' once the search runs on a
-        # background thread inside this adapter
 
         sys.stdout.flush()
 

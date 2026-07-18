@@ -30,7 +30,7 @@ Git pushes must use SSH (`git@github.com:pdloc06/PyCheckmate.git`); the HTTPS re
 
 Two packages and a thin root, connected by narrow contracts. `engine/` is pure stdlib (never import pygame there — that's what lets it run under PyPy); `gui/` + `main.py` + `config.py` are the CPython/pygame side.
 
-**`engine/chess_engine.py`** — all rules state. `GameState` holds the board as `list[list[str]]` of `'wP'…'bK'`/`'--'` codes, row 0 = rank 8 (Black home). There are **two parallel move pipelines**:
+**`engine/chess_engine.py`** — all rules state. `GameState` holds the board as `list[list[int]]` of small integer piece codes (`0`=empty, `1-6`=white P/N/B/R/Q/K, `7-12`=black), row 0 = rank 8 (Black home). `0 < piece < 7` tests colour and `PIECE_TYPE[piece]` recovers a colour-independent 1-6 type index; `CODE_TO_INT`/`INT_TO_CODE` convert to the legacy `'wP'`/`'--'` strings only at the FEN, SAN/UCI, and GUI-image boundaries. There are **two parallel move pipelines**:
 
 - *UI path*: `get_valid_moves()` returns `Move` objects; the game applies them only via `gs.make_move(move)`, which maintains `move_log`, `state_log`, repetition counts, and does a full Zobrist recompute. Undo via `unmake_move()`.
 - *AI path* (hot loop): `get_valid_moves(for_ai=True)` returns 5-tuples `(start_row, start_col, end_row, end_col, move_type)` where type 0=normal, 1=castle, 2=en-passant, 3–6=promotion Q/R/B/N. Search executes them with `make_ai_move()`/`unmake_ai_move()`, which skip the logs, update the Zobrist key incrementally, and return a 4-tuple undo package `(captured_piece, old_enpassant, old_castle_rights, old_zobrist)`. `for_ai=True` also intentionally skips 50-move/threefold hashing — the search layer handles repetition itself via `zobrist_history`.
@@ -45,7 +45,7 @@ The two paths meet at `Move.from_ai_tuple(tuple, board)` / `Move.to_ai_tuple()`:
 
 **`engine/analysis.py`** — chess.com-style game review (pure stdlib). Scores are converted to win% (logistic curve) and each move is graded by win% loss: `best/excellent/good/inaccuracy/mistake/blunder` ladder plus `brilliant` (sound sacrifice, via a lightweight attacker-scan heuristic), `great_find` (only good move, verified by a second search excluding the best move), `missed_win`, `book` (small SAN-line opening table, built lazily), and `forced`. Tag string values double as `evaluate_icons/` file stems. `GameAnalysis` runs the whole-game loop on a daemon thread (one search per position; `evals[i]` = position before move i) and supports appending exploration moves mid-analysis; `move_finder.search_position()` is the score-returning search variant it builds on.
 
-**`engine/uci.py` + `engine/uci_client.py`** — the engine-as-a-process pair. `uci.py` is a UCI stdin/stdout adapter (run as `python -m engine.uci` from the repo root); it's the Lichess bot path. `uci_client.py` is the host side: it spawns `engine.uci` under PyPy (found on PATH or via `uv python find pypy`) and speaks UCI to it. Comments prefixed `AI_PLANNING` mark roadmap extension points tied to `LICHESS_BOT_PLAN.md` — keep them.
+**`engine/uci.py` + `engine/uci_client.py`** — the engine-as-a-process pair. `uci.py` is a UCI stdin/stdout adapter (run as `python -m engine.uci` from the repo root); it's the Lichess bot path. `uci_client.py` is the host side: it spawns `engine.uci` under PyPy (found on PATH or via `uv python find pypy`) and speaks UCI to it.
 
 **`main.py` + `gui/`** — Pygame front end. Rules:
 

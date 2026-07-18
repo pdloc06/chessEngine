@@ -4,7 +4,7 @@ and special mechanics (En Passant, Castling, Promotion).
 """
 import random
 
-from engine.chess_engine import GameState, Move
+from engine.chess_engine import GameState, Move, EMPTY
 
 
 def test_pawn_moves(gs):
@@ -145,7 +145,7 @@ def _noisy_reference(gs):
     board = gs.board
     return {
         m for m in gs.get_valid_moves(for_ai=True)
-        if board[m[2]][m[3]] != '--' or m[4] == 2 or m[4] >= 3
+        if board[m[2]][m[3]] != EMPTY or m[4] == 2 or m[4] >= 3
     }
 
 
@@ -181,8 +181,8 @@ def test_captures_only_returns_all_evasions_in_check():
     evasions = gs.get_valid_moves(for_ai=True, captures_only=True)
     assert set(evasions) == set(gs.get_valid_moves(for_ai=True))
     # Kxe2 is among them, but so are the quiet king steps
-    assert any(gs.board[m[2]][m[3]] != '--' for m in evasions)
-    assert any(gs.board[m[2]][m[3]] == '--' for m in evasions)
+    assert any(gs.board[m[2]][m[3]] != EMPTY for m in evasions)
+    assert any(gs.board[m[2]][m[3]] == EMPTY for m in evasions)
 
 
 def test_captures_only_includes_quiet_promotions(custom_gs):
