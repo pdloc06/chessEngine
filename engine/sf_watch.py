@@ -113,7 +113,7 @@ def engine_version() -> str:
         return 'unknown'
 
 
-def version_cut(version: str, cuts_path: str) -> float:
+def version_cut(version: str, cuts_path: str, record: bool = True) -> float:
     """
     Find when this engine build was first deployed, recording it if new.
 
@@ -129,6 +129,9 @@ def version_cut(version: str, cuts_path: str) -> float:
         Engine build label.
     cuts_path : str
         JSON file mapping version -> first-seen epoch timestamp.
+    record : bool, optional
+        Whether an unseen version may be written. False for read-only
+        queries, which must not invent a deployment that never happened.
 
     Returns
     -------
@@ -143,6 +146,15 @@ def version_cut(version: str, cuts_path: str) -> float:
         except (json.JSONDecodeError, OSError):
             cuts = {}
     if version not in cuts:
+        if not record:
+            # A query about a version that was never deployed -- typically
+            # because the working tree is dirty, so the rev carries a
+            # "-dirty" suffix the running watcher does not have. Fall back to
+            # the most recent real cut, which is the deployment actually
+            # playing. Returning 0.0 instead would put every historical game
+            # "in scope" and leave `bot down` waiting on a backlog that is
+            # not its to drain.
+            return max(cuts.values()) if cuts else 0.0
         cuts[version] = time.time()
         os.makedirs(os.path.dirname(cuts_path) or '.', exist_ok=True)
         with open(cuts_path, 'w', encoding='utf-8') as handle:
@@ -432,7 +444,11 @@ def main() -> None:
     version = args.version or engine_version()
     since = 0.0
     if args.since == 'auto':
-        since = version_cut(version, args.cuts)
+        # A query must not *create* a cut. `bot down` calls --pending, and
+        # registering there would stamp whatever HEAD happened to be at
+        # shutdown as a deployed version -- inventing versions that never
+        # played a game and muddying the file the analysis depends on.
+        since = version_cut(version, args.cuts, record=not args.pending)
     elif args.since == 'now':
         since = time.time()
     elif args.since:
