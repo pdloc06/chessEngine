@@ -23,6 +23,7 @@ state is untouched. When running the search on a background thread, pass a
 import math
 import random
 import time
+from collections.abc import Callable
 
 from engine.chess_engine import (
     AI_PROMO_TYPE, GameState, PIECE_TYPE,
@@ -440,6 +441,7 @@ def find_best_move(
     time_limit: float = 5.0,
     tt: TTable | None = None,
     hard_limit: float | None = None,
+    on_iteration: Callable[[int, int, int, float, MoveTuple], None] | None = None,
 ) -> MoveTuple | None:
     """
     Entry point for the AI: search the position and return the best move.
@@ -466,13 +468,16 @@ def find_best_move(
     hard_limit : float, optional
         Absolute ceiling in seconds for the panic extension (see
         `search_position`). Omitted, the soft limit is also the ceiling.
+    on_iteration : callable, optional
+        Per-iteration progress callback; see `search_position`.
 
     Returns
     -------
     MoveTuple or None
         The best move tuple found, or None if the position has no legal moves.
     """
-    return search_position(gs, valid_moves, max_depth, time_limit, tt, hard_limit)[0]
+    return search_position(gs, valid_moves, max_depth, time_limit, tt,
+                           hard_limit, on_iteration)[0]
 
 
 def search_position(
@@ -482,6 +487,7 @@ def search_position(
     time_limit: float = 5.0,
     tt: TTable | None = None,
     hard_limit: float | None = None,
+    on_iteration: Callable[[int, int, int, float, MoveTuple], None] | None = None,
 ) -> tuple[MoveTuple | None, int]:
     """
     Search the position and return both the best move and its score.
@@ -511,6 +517,12 @@ def search_position(
         iteration's score collapses (see PANIC_SCORE_DROP), the search may
         keep thinking past the soft limit up to this ceiling. Omitted or
         not above `time_limit`, panic changes nothing — old behavior.
+    on_iteration : callable, optional
+        Called after every completed deepening iteration with
+        ``(depth, score, nodes, elapsed_seconds, best_move)``. This is how
+        the UCI adapter emits `info` lines: the search itself must never
+        print, because it also runs inside the GUI where stdout is not a
+        protocol channel. Reporting is the caller's business.
 
     Returns
     -------
@@ -582,6 +594,10 @@ def search_position(
                      and abs(score) < MATE_THRESHOLD)
             info.time_limit = hard if panic else time_limit
             prev_score = score
+
+            if on_iteration is not None:
+                on_iteration(depth, score, info.nodes,
+                             time.perf_counter() - info.start_time, move)
 
         # A forced mate found: deeper search cannot improve it
         if abs(best_score) >= MATE_THRESHOLD:

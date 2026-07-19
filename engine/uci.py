@@ -268,13 +268,70 @@ def parse_go_limits(tokens: list[str], white_to_move: bool,
         # the ceiling can't exceed a fixed fraction of what's actually left.
         hard = max(movetime, min(PANIC_HARD_FACTOR * movetime,
                                  remaining / 1000.0 / PANIC_CLOCK_DIVISOR))
-        if depth is None:
-            depth = CLOCK_MAX_DEPTH  # the clock, not the depth, stops the search
+
+    # *Any* explicit time budget — `movetime` as well as a clock — means the
+    # timer is the intended stopping rule, so the depth must not silently cap
+    # it first. This used to apply only on the clock path, which left
+    # `go movetime 4000` searching to DEFAULT_DEPTH (5) and returning after
+    # ~450ms of its 4s. Lichess was unaffected (the bridge sends wtime/btime),
+    # but every movetime-driven test was measuring a depth-capped engine.
+    # DEFAULT_DEPTH now applies only when there is no time information at all.
+    if depth is None and movetime is not None:
+        depth = CLOCK_MAX_DEPTH
 
     movetime = movetime if movetime is not None else DEFAULT_MOVETIME
     return (depth if depth is not None else DEFAULT_DEPTH,
             movetime,
             hard if hard is not None else movetime)
+
+
+def report_iteration(depth: int, score: int, nodes: int, elapsed: float,
+                     move: move_finder.MoveTuple,
+                     board: list[list[int]]) -> None:
+    """
+    Print one UCI `info` line for a completed deepening iteration.
+
+    Without these lines the engine is a black box: Lichess shows no evaluation,
+    and there is no way to tell from a real game what depth was reached or
+    whether the clock was being spent. Every offline diagnostic this project
+    has needed so far had to reconstruct that information by re-analysing the
+    finished PGN, which is both slow and unable to see what the engine
+    *actually* thought at the time.
+
+    Parameters
+    ----------
+    depth : int
+        Iteration depth just completed.
+    score : int
+        Score in centipawns from the side to move's perspective — which is
+        already the perspective UCI wants, so no conversion is needed.
+    nodes : int
+        Nodes searched so far this move.
+    elapsed : float
+        Seconds spent so far this move.
+    move : move_finder.MoveTuple
+        Best move of this iteration.
+    board : list of list of int
+        Root board, needed to render the move in UCI notation.
+
+    Returns
+    -------
+    None
+    """
+    if abs(score) >= move_finder.MATE_THRESHOLD:
+        # UCI reports mate in *moves*, signed for the side to move, while the
+        # search stores plies-from-root inside the mate score.
+        plies = move_finder.CHECKMATE_SCORE - abs(score)
+        moves_to_mate = (plies + 1) // 2
+        report = f'mate {moves_to_mate if score > 0 else -moves_to_mate}'
+    else:
+        report = f'cp {score}'
+
+    best_uci = chess_engine.Move.from_ai_tuple(move, board).get_uci_notation()
+    nps = int(nodes / elapsed) if elapsed > 0 else 0
+    print(f'info depth {depth} score {report} nodes {nodes} nps {nps} '
+          f'time {int(elapsed * 1000)} pv {best_uci}')
+    sys.stdout.flush()
 
 
 def handle_go(gs: chess_engine.GameState, tokens: list[str]) -> str:
@@ -302,8 +359,11 @@ def handle_go(gs: chess_engine.GameState, tokens: list[str]) -> str:
     # age its estimate of how many moves are still to come.
     depth, movetime, hard = parse_go_limits(tokens, gs.white_to_move,
                                             len(gs.move_log) // 2)
-    best = move_finder.find_best_move(gs, max_depth=depth, time_limit=movetime,
-                                      tt=transposition_table, hard_limit=hard)
+    board = gs.board
+    best = move_finder.find_best_move(
+        gs, max_depth=depth, time_limit=movetime, tt=transposition_table,
+        hard_limit=hard,
+        on_iteration=lambda d, s, n, t, m: report_iteration(d, s, n, t, m, board))
     if best is None:
         return '0000'  # UCI null move: no legal moves available
 

@@ -101,9 +101,13 @@ def test_clock_fields_use_black_clock_when_black_moves():
 
 def test_movetime_beats_clock_fields():
     """An explicit movetime overrides any clock arithmetic, including the
-    panic ceiling (hard == movetime: no extension on promised budgets)."""
+    panic ceiling (hard == movetime: no extension on promised budgets).
+
+    The depth is left unlimited so the promised budget is what actually
+    stops the search. This assertion used to read DEFAULT_DEPTH, which meant
+    `go movetime 4000` stopped at depth 5 after ~450ms of its 4 seconds."""
     tokens = ['movetime', '1500', 'wtime', '600000', 'winc', '5000']
-    assert uci.parse_go_limits(tokens, True) == (uci.DEFAULT_DEPTH, 1.5, 1.5)
+    assert uci.parse_go_limits(tokens, True) == (uci.CLOCK_MAX_DEPTH, 1.5, 1.5)
 
 
 def test_explicit_depth_kept_alongside_clock():
