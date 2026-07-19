@@ -176,7 +176,7 @@ def main() -> None:
         '-recover',
     ]
     if args.pgnout:
-        command += ['-pgnout', args.pgnout]
+        command += ['-pgnout', f'file={args.pgnout}']
 
     print(f'new:      {args.new}\nbaseline: {args.baseline}')
     print(f'tc {args.tc}, SPRT elo0={args.elo0} elo1={args.elo1} '
