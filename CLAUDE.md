@@ -18,11 +18,26 @@ uv run pytest tests/test_ai_interface.py::test_perft_initial_position -q   # One
 uv run mypy main.py config.py engine/ gui/ tests/           # Type check (config in mypy.ini)
 uv run --no-project python -m engine.uci                    # UCI engine REPL
 uv run --no-project python -m engine.bench                  # Engine benchmark (add -p pypy3.11 to compare)
+
+# Measurement (see "Measuring engine changes"). All need PYTHONPATH=.
+PYTHONPATH=. uv run --no-project python -m engine.calibrate  # Strength vs UCI_Elo-limited Stockfish
+PYTHONPATH=. uv run --no-project python -m engine.sprt /tmp/baseline   # SPRT vs a baseline checkout
+PYTHONPATH=. uv run --no-project python -m engine.sf_review  # Grade the record directory with Stockfish
+PYTHONPATH=. uv run --no-project python -m engine.sf_watch --once      # Drain the analysis backlog
 ```
+
+External tools these need: `stockfish` (`brew install stockfish`) and
+`fastchess` (built from source into `~/.local/bin`; `engine/sprt.py` prints
+the recipe if it is missing).
 
 Run `pytest` and the full `mypy` command above before finishing any change — they are the project's quality gates.
 
 GUI code can be exercised headlessly with `SDL_VIDEODRIVER=dummy`. PyPy (installed via `uv python install pypy3.11`) hosts the AI subprocess at runtime and can run any `engine/` module; it is auto-detected, never required.
+
+The Lichess bot is controlled by `bot up` / `bot down` / `bot status` / `bot log`
+(`~/.local/bin/bot`). `bot up` also starts the Stockfish analysis watcher, and
+`bot down` waits for the current game *and* its analysis to finish before
+stopping — `bot down now` skips both waits. Operations manual: `LICHESS_BOT.md`.
 
 Git pushes must use SSH (`git@github.com:pdloc06/PyCheckmate.git`); the HTTPS remote has no stored credentials. `gh` CLI is available for PRs.
 
@@ -59,13 +74,20 @@ The two paths meet at `Move.from_ai_tuple(tuple, board)` / `Move.to_ai_tuple()`:
 ## Measuring engine changes
 
 Engine work is judged by measurement, never by intuition — and the *instrument
-depends on what kind of change it is*. Getting this wrong once cost a whole
-program of overnight matches (search stages F–J) that returned ~0 net Elo, most
-of it unresolvable noise rather than real results.
+depends on what kind of change it is*. Getting this wrong has cost this project
+more than any bug: a whole program of overnight matches (search stages F–J) that
+returned ~0 net Elo, and then 43 Lichess games that could not answer the
+question they were collected for. Both failures were measurement design, not
+engine quality.
+
+**Know the baseline first.** The engine measures **~2133 Elo** (2026-07-19,
+`engine/calibrate.py`, three Stockfish `UCI_Elo` levels agreeing within 47
+points). Nothing gets tuned before a number like this exists, because without
+it there is no way to tell a real regression from a hostile sample. See the
+`engine-calibrated-strength` memory.
 
 **Score-neutral changes** (faster evaluation, cheaper move generation, provably
-equivalent pruning) — use `uv run --no-project python -m engine.bench`, which
-reports node count *and* time:
+equivalent pruning) — `uv run --no-project python -m engine.bench`:
 
 - **Node count is exactly deterministic, and it is the safety proof.** Identical
   node totals across the bench positions mean the search made every same
@@ -77,57 +99,73 @@ reports node count *and* time:
 - Time is noisy (~29% run-to-run on this machine). Take best-of-5, run the two
   versions back to back, and only believe a result whose sample ranges are
   disjoint.
-- A microbenchmark of just the changed function separates the signal from the
-  ~85% of runtime the change doesn't touch.
 
 **Behaviour changes** (pruning that can change a result, evaluation terms, move
-ordering, anything touching the clock) — **play real games on Lichess.** This is
-the standard workflow now; self-play is a smoke test, not a verdict.
+ordering, anything touching the clock) — **SPRT**, via
+`engine/sprt.py` (a `fastchess` wrapper):
 
-1. Commit the change, then `bot up` — matchmaking on, `challenge_mode: casual`.
-2. **Record the version cut immediately**: the exact restart timestamp, in the
-   `lichess-game-records-version-cut` memory. PGNs in
-   `<lichess-bot clone>/game_records/` carry no version marker, so file mtime is
-   the *only* way to tell which engine played a game. Written down after the
-   games pile up, it cannot be reconstructed.
-3. Leave it running. It stays up until Lucas says `bot down` — do not stop it to
-   check on it, and do not restart it to tweak config (see the bot-config
-   protocol: batch edits, exactly one down/up cycle).
-4. After `bot down`, analyse: `engine.tm_replay` over the new set versus the
-   previous one, comparing unspent clock at game end and the per-band error
-   rates from `analysis.classify_move`.
-5. Repeat for the next change.
+```bash
+git worktree add /tmp/baseline master
+PYTHONPATH=. uv run --no-project python -m engine.sprt /tmp/baseline
+```
 
-Why real games rather than a self-play match: they are played at the actual
-deployed time controls, against varied real opponents, and every move is graded
-against outcomes the engine actually suffered. A match returns one scalar; a set
-of real games says *where* the engine lost and *what it was doing with its
-clock* when it did. Real blunders are also the only labels not contaminated by
-our own guesses — hand-picked "hard" positions have been measured backwards.
+- Fixed-size matches are the trap to avoid. 100 games resolve ±70 Elo and 400
+  resolve ±35 — so judging a 5–20 Elo change that way asks a question the
+  sample cannot answer, which is exactly what stages F–J did. SPRT instead
+  stops as soon as the evidence is decisive and declines to answer when the
+  change is genuinely neutral.
+- **One change in flight at a time.** When five features land together and the
+  total is zero, nothing has been learned about any of them — two could be +30
+  and three −20. Stage J was reverted with the commit message "never measured
+  on its own".
+- Concurrency 3 saturates this machine (4 performance cores) and makes it
+  unusable; concurrency 1 keeps it responsive. Games are played in
+  colour-reversed pairs from `books/uho_5000.epd`, a seeded sample of
+  Stockfish's UHO_Lichess_4852_v1 — unbalanced human openings cut the draw
+  rate, which raises information per game.
 
-**The self-play clock-fidelity trap** — why the time-management gate was
-abandoned twice. `LOW_CLOCK_SECONDS` (25s) and `PANIC_CLOCK_SECONDS` (10s) are
-*absolute* thresholds, so a scaled-down test clock moves them to a completely
-different point in the game:
+**Absolute strength** — `engine/calibrate.py` plays Stockfish pinned to a
+requested Elo via `UCI_LimitStrength`, and brackets the level where we score
+50%. Use it after every milestone. It answers "how strong are we", which SPRT
+(a *relative* instrument) never can, and it is a foreign opponent, so unlike
+self-play it can see mistakes our own evaluation does not understand.
 
-| Test clock | Hoarding tier engages |
-| --- | --- |
-| 90+0 | move 39 — inside the moves-21-40 band the change targets |
-| 300+0 (deployed) | move 60 — clear of it |
+### The clock-fidelity trap
 
-A 90+0 match therefore measures a version of the change that partially cancels
-itself, and it read −45 Elo for exactly that reason. Testing at the real control
-costs 24–48h for ±50/±35 Elo. **Any self-play clock that is not the deployed
-clock is measuring different code paths than the ones that ship.**
+`LOW_CLOCK_FRACTION` and `PANIC_CLOCK_FRACTION` are **fractions of the starting
+clock**, and they must stay that way. As absolute seconds (25s and 10s) they sat
+at a fixed point on the wall clock but a *moving* point in the game — engaging
+around move 60 of a 5+0 game but move 39 of a 90-second test game, inside the
+very band a change was targeting. A scaled test clock therefore measured
+different code paths than the ones that ship, and read −45 Elo for that reason
+alone. Two overnight gates were lost to it.
 
-`engine.abtest` still exists for quick sanity checks (`abtest "<baseline
-worktree>" <games>`; games are played in colour-reversed pairs from a shared
-8-ply book, which is what makes the variance survivable). If it is ever used for
-a real verdict again: 400 games minimum, never two matches concurrently, and
-`selfplay.DEPTH` must stay above what the movetime can actually reach — it was
-6, which let searches end on the ply cap rather than the clock in 4 of 7
-realistic positions, so a faster engine had nowhere to spend its speed and
-measured as 0 Elo however much it helped.
+The remaining absolute quantities are `MOVE_OVERHEAD` + `CLOCK_RESERVE`
+(1.15s), which are genuinely physical — network latency does not shrink with
+the clock. They eat 0.4% of a 300s clock but 11.5% of a 10s one, so **60s is
+the floor** below which the engine is measurably playing a different game.
+That is why `engine/sprt.py` defaults to `60+0`.
+
+### Real games
+
+The bot plays **rated** games (`challenge_mode: rated`, opponent bounds
+1800–2500 around the calibration). This is not a detail: the first 43 games
+were casual, so the rating never left Lichess's provisional 3000, matchmaking
+kept pairing us with ~2930 bots, and we lost 42 of 43 — which is very close to
+the exact arithmetic of a 795-Elo gap, and says nothing whatever about the
+engine. A casual bot cannot self-correct its own matchmaking.
+
+`bot up` starts the bot **and** `engine/sf_watch.py`, which grades each game
+with Stockfish in the idle gap before the next one begins and appends a
+version-stamped record to `~/.local/share/pycheckmate/game_analysis.jsonl`.
+`bot down` waits for the current game *and* the current analysis to finish
+before stopping. Records carry per-move centipawn loss, accuracy, and seconds
+actually spent (from the PGN's `%clk`), so ACPL, the
+inaccuracy/mistake/blunder ladder, per-phase breakdowns and "did we spend time
+where we went wrong" are all recoverable without re-searching.
+
+**Never average across `engine_version`.** That is the same error as the casual
+games, one level down: a mean over two different engines describes neither.
 
 ## Tests
 

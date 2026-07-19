@@ -22,8 +22,9 @@ adapter that runs the same engine as a bot on Lichess.
 | Engine core | **Pure stdlib, zero dependencies** | Lets the engine run under PyPy |
 | Runtime accel | PyPy 3.11 subprocess | JIT gives a large speedup on the hot search loop; auto-detected, never required |
 | GUI | pygame-ce | Desktop game + review screen |
-| Tooling | uv, pytest, mypy (strict) | Reproducible env; 124 tests and a clean type check are the gates on every change |
+| Tooling | uv, pytest, mypy (strict) | Reproducible env; 126 tests and a clean type check are the gates on every change |
 | Deployment | lichess-bot bridge, macOS | Engine speaks UCI, so a standard bridge hosts it |
+| Measurement | Stockfish (referee), fastchess (SPRT) | An engine cannot grade itself: it misjudges a position identically when playing and when grading |
 
 **Goal.** Learn search and evaluation by building them rather than reading about
 them — and then prove the result is real by making it play rated games against
@@ -31,8 +32,12 @@ strangers. A secondary goal became just as important: learn to **measure**
 engine changes honestly, because most of the interesting failures in this
 project were measurement failures, not coding failures.
 
-**Scale.** ~10,900 lines total; ~5,700 in `engine/`, of which `move_finder.py`
+**Scale.** ~11,600 lines total; ~6,400 in `engine/`, of which `move_finder.py`
 (search, 1,651 lines) and `chess_engine.py` (rules, 1,642 lines) are the core.
+Roughly a sixth of `engine/` is measurement tooling rather than chess.
+
+**Where it stands.** ~2133 Elo, calibrated against Stockfish; playing rated
+games on Lichess with every game automatically graded by an independent engine.
 
 ---
 
@@ -136,7 +141,30 @@ Ten measured stages (A–J), each committed separately so it could be reverted a
 - ✅ **Time budget reshaped** (moves-to-go + overhead reserve). Middlegame
   thinking time **+46%**.
 - ❌ **Best-move stability — measured worse (1.11x vs 1.34x), reverted.**
-- ⏳ **400-game clock-mode gate running.** Started 2026-07-19.
+- ❌ **400-game clock-mode gate — abandoned twice, unusable.** The absolute
+  hoarding thresholds relocate when the test clock is scaled, so a 90+0 match
+  measured a partially self-cancelling version of the change and read −45 Elo.
+  Recorded as void rather than as evidence.
+
+### Phase 5 — Measurement rebuilt (2026-07-19 → 07-20)
+- ✅ **The 1/43 record explained.** All 47 Lichess games were *casual*, so the
+  rating never left the provisional 3000 and matchmaking kept pairing the bot
+  with ~2930 opponents. Not an engine result at all.
+- ✅ **First real strength number: ~2133 Elo**, from three Stockfish
+  `UCI_Elo` levels agreeing within 47 points (`engine/calibrate.py`).
+- ✅ **Bitboard rewrite considered and rejected on measurement.** python-chess
+  (bitboard) benchmarks *slower* than our mailbox engine in Python.
+- ✅ **UCI `info` output added** — the engine had been unobservable in
+  production. It immediately exposed a depth cap bug.
+- ✅ **Clock utilisation 58% → 101%.** Aborted iterations are no longer
+  discarded.
+- ✅ **Hoarding thresholds made relative** to the starting clock, retiring the
+  trap that voided two overnight gates.
+- ✅ **SPRT harness** (`engine/sprt.py` over fastchess) replacing fixed-N
+  matches.
+- ✅ **Automated per-game Stockfish analysis** (`engine/sf_watch.py`), running
+  in the bot's idle time and stamped with the engine build.
+- ✅ **Redeployed rated** with opponent bounds around the calibrated rating.
 
 ---
 
@@ -298,6 +326,135 @@ edits, then exactly one restart cycle.**
 
 ---
 
+### 8. Losing 42 of 43 games, and why that was a config bug
+
+The bot went 1/43 against Lichess opponents averaging 2928. Read at face value
+that is a damning number, and it triggered a full "the engine is
+over-engineered, rebuild it from scratch" review — including a proposal to
+migrate to bitboards.
+
+The API told a different story:
+
+```
+"count": { "all": 47, "rated": 0, "win": 5, "loss": 42 }
+"perfs": { "blitz": { "games": 0, "rating": 3000, "rd": 500, "prov": true } }
+```
+
+**`rated: 0`.** Every game had been played casual, so the rating never moved off
+Lichess's provisional 3000 — and matchmaking used that 3000 to choose
+opponents. It is a closed loop with no exit: casual games → rating never
+updates → stays 3000 → paired with ~2900 bots → lose everything → still no
+rating feedback.
+
+The setting was mine, chosen as a safety measure when first deploying. I never
+asked what it did to the *measurement*.
+
+Two independent instruments then showed the engine was not the problem.
+Stockfish at depth 14 over all 43 games put our blunder rate at **0.4%** (5 in
+1289 moves) — not an engine that hangs pieces, an engine consistently slightly
+worse than a much stronger opponent. And a calibration ladder against
+`UCI_LimitStrength` Stockfish returned:
+
+| Stockfish level | Our score | Implied rating |
+| --- | --- | --- |
+| 1600 | 19.0/20 | ~2112 |
+| 2000 | 13.5/20 | ~2127 |
+| 2400 | 4.0/20 | ~2159 |
+
+Three levels agreeing within 47 Elo. Against 2928-rated opposition, a 2133
+engine is *expected* to score 0.44 points in 43 games. It scored 1.0 — better
+than its rating predicted.
+
+**What it cost:** the entire time-management program had been tuned against
+those games. Not wrong work, but work whose evidence base could not support any
+conclusion — an 1800 engine and a 2400 engine both score ~0% at that gap, so
+the sample was structurally incapable of distinguishing them.
+
+**The general lesson, which is the one worth keeping:** I had built three
+increasingly sophisticated analysis tools on top of a dataset without ever
+checking that the dataset could express the thing being measured. Sophistication
+downstream cannot recover a signal that was never sampled. The fix — one config
+line, `challenge_mode: rated` — was trivial. Finding it took reading the raw
+API response instead of the scoreboard.
+
+### 9. Rejecting the bitboard rewrite on evidence
+
+The natural next move after "the engine is too complex for its performance" was
+to rewrite the board representation as bitboards — the standard answer in
+chess programming, and the one every reference recommends.
+
+Measured first, same perft, make/unmake at every ply:
+
+| Engine | Representation | Host | Nodes/sec |
+| --- | --- | --- | --- |
+| python-chess | **bitboard** | CPython | 335,510 |
+| PyCheckmate | mailbox + piece-sets | CPython | **392,994** |
+| PyCheckmate | mailbox + piece-sets | PyPy | **958,410** |
+
+Our mailbox engine is already 17% faster than a mature bitboard library on
+CPython. The reason is that the bitboard advantage is a *C* advantage:
+`attacks & ~own` is one machine instruction over 64 squares, but in Python every
+`&` allocates a heap integer, and Python has no `uint64` — bit 63 silently
+promotes into arbitrary-precision arithmetic. Meanwhile mailbox with piece-sets
+iterates only the ~16 pieces that exist.
+
+Profiling closed the argument: move generation is **37%** of search time, so by
+Amdahl's law even an infinitely fast generator caps out at a 1.6× speedup —
+roughly half a ply. Weeks of work on the most correctness-critical code in the
+project, in a direction the benchmark said was slower.
+
+**The instinct behind the request was right, the mechanism wasn't.** The real
+levers for depth are searching *fewer* nodes (ordering) and incremental
+evaluation, not visiting nodes faster.
+
+### 10. An engine nobody could see
+
+The UCI adapter emitted no `info` lines at all — no depth, no score, no nodes.
+Lichess showed nothing, and no record existed of what depth a real game reached.
+Every diagnostic in this document had to be reconstructed offline from finished
+PGNs, which cannot see what the engine actually thought at the time.
+
+Adding them took an hour, and the first run exposed a bug they would have caught
+weeks earlier: `go movetime 4000` returned after **452ms**, having stopped at
+depth 5. The clock path set an unlimited depth; the `movetime` path fell through
+to `DEFAULT_DEPTH = 5`. Lichess was unaffected (the bridge sends `wtime`/`btime`),
+but every movetime-driven test had been measuring a depth-capped engine.
+
+Fixing it changed the move played on the test position.
+
+**Observability is not a nice-to-have on a system you are trying to measure.**
+The whole project had been running instruments against a black box.
+
+### 11. A third of the clock, thrown away
+
+With `info` lines available, the search turned out to be spending 58% of a 3s
+budget and 69% of a 5s one.
+
+Two rules combined to cause it. `_search_root` discarded a timed-out iteration
+*wholesale*, and because starting an iteration you couldn't finish was therefore
+pure waste, the soft-stop gate refused to begin one past 45% of the budget. The
+second rule was a rational response to the first.
+
+The first is the real defect. Root moves are ordered best-first from the
+previous iteration, so a partial pass has already examined the most promising
+candidates — it either confirms the previous best or replaces it with a move
+that outscored it a ply deeper. Both are strictly better information than
+stopping early. Keeping the partial result let the gate move to 0.9:
+
+| Budget | Before | After |
+| --- | --- | --- |
+| 3.0s | 1.73s (58%) | 3.03s (101%) |
+| 5.0s | 3.44s (69%) | 5.01s (100%) |
+
+That then exposed a second-order problem: the clock was sampled every 2048
+nodes (~58ms), an error that is near-constant in *time* and therefore only
+bites when the budget is small — a 0.1s budget overran by 41%, exactly the
+situation a nearly-flagged clock produces. Sampling every 512 nodes quartered
+it for 0.6% on the benchmark, **with the node count unchanged** — which is the
+proof that the search itself was untouched.
+
+---
+
 ## Performance Benchmarks
 
 Measured with `engine.bench` (4 positions: opening / middlegame / tactical /
@@ -332,9 +489,51 @@ reconstruct honestly._
 
 ---
 
+### Representation: mailbox vs bitboard (2026-07-19)
+
+Perft from the start position, make/unmake at every ply:
+
+| Engine | Representation | Host | Nodes/sec |
+| --- | --- | --- | --- |
+| python-chess | bitboard | CPython | 335,510 |
+| PyCheckmate | mailbox + piece-sets | CPython | **392,994** |
+| PyCheckmate | mailbox + piece-sets | PyPy | **958,410** |
+
+### Where search time goes (`cProfile`, depth 6, middlegame)
+
+| Component | Share |
+| --- | --- |
+| Move generation | 37% |
+| Evaluation | 22% |
+| Ordering, SEE, make/unmake, overhead | 41% |
+
+### Clock utilisation (2026-07-20)
+
+| Budget | Before | After |
+| --- | --- | --- |
+| 3.0s | 1.73s (58%) | 3.03s (101%) |
+| 5.0s | 3.44s (69%) | 5.01s (100%) |
+
+Overrun at a 0.1s budget: 141% → 111% (clock sampled every 512 nodes instead
+of 2048; benchmark cost 0.6%, node count unchanged).
+
+### Move quality by game phase (Stockfish depth 12, 43 games, our moves)
+
+| Moves | ACPL | Blunders |
+| --- | --- | --- |
+| 1–15 | 13.3 | 1 |
+| 16–30 | **30.2** | 5 |
+| 31–45 | 28.1 | 3 |
+| 46+ | 24.1 | 1 |
+
+The opening is clean — the polyglot book is doing its job. Play degrades
+sharply the moment it runs out while the position is still complex.
+
+---
+
 ## Testing & Validation
 
-**124 tests, plus strict mypy across 30 source files.** Both gate every change.
+**126 tests, plus strict mypy across 34 source files.** Both gate every change.
 
 | Method | What it proves | Result |
 |---|---|---|
@@ -347,12 +546,31 @@ reconstruct honestly._
 | **Allocation probe** (`tm_allocate.py`) | Whether a time rule spends more where games were lost | Rejected the stability heuristic (1.11x vs 1.34x) |
 | **Live Lichess play** | Everything, against real opponents | Deployed and playing |
 
+**Measurement instruments** (the part that took longest to get right):
+
+| Instrument | Question it answers |
+| --- | --- |
+| `engine/bench.py` | Did a score-neutral change stay score-neutral? *Node counts must be identical* — a proof, not a p-value |
+| `engine/sprt.py` | Is version B stronger than version A? Sequential test over fastchess, stops when decisive, declines when neutral |
+| `engine/calibrate.py` | How strong are we in absolute terms? Stockfish pinned by `UCI_LimitStrength` |
+| `engine/sf_review.py` | Where did we go wrong in these games? Independent Stockfish grading |
+| `engine/sf_watch.py` | Same, automatically, in the bot's idle time, stamped with the engine build |
+| perft suite | Is move generation still exactly correct? |
+
+Two design rules were learned the hard way and now govern all of them: **one
+change in flight at a time** (five features landing together with a net zero
+teaches nothing about any of them), and **never average across engine
+versions** (a mean over two engines describes neither).
+
 **Known limitations.**
 - No opening book of its own (relies on the bridge's polyglot book).
 - No endgame tablebases.
 - Single-threaded search — no SMP.
 - Evaluation has no king-safety term yet.
-- The 400-game gate uses self-play games averaging 72 moves per side, while real
+- 34 hand-picked search/evaluation constants, none ever fitted to data.
+- Self-play at a scaled clock is no longer used as a verdict at all; see the
+  clock-fidelity trap. The historical caveat below applies to the abandoned
+  gate: it used self-play games averaging 72 moves per side, while real
   online games average 45 — so it exercises the time schedule's tail harder than
   deployment does.
 - Zero flagged games observed so far in the gate, meaning the *overspend
@@ -362,34 +580,50 @@ reconstruct honestly._
 
 ## Results & Current Status
 
-**Deployed and playing rated games on Lichess** (blitz 5+0 and 10+2; bullet
-disabled — move overhead is too tight to be safe there yet).
+**Deployed on Lichess as `PyCheckmate`** (blitz 5+0 and rapid 10+2; bullet
+disabled — move overhead is too tight to be safe there yet), playing **rated**
+games against opponents bracketed to 1800–2500.
 
-**Strength:** not yet self-calibrated. Task open to run a laddered match against
-known-rating opposition to fix the engine's own Elo, which is also needed to set
-sane matchmaking bounds.
+**Strength: ~2133 Elo** (2026-07-19), measured against Stockfish pinned to
+requested ratings via `UCI_LimitStrength`:
 
-> **📌 PLACEHOLDER — fill in manually once available**
-> - Lichess bot username: `________`
-> - Blitz rating: `________`
-> - Bullet / Rapid rating: `________`
-> - Games played / W-L-D: `________`
-> - Profile link: `________`
+| Stockfish level | Score | Implied rating |
+| --- | --- | --- |
+| 1600 | 19.0/20 (95.0%) | ~2112 |
+| 2000 | 13.5/20 (67.5%) | ~2127 |
+| 2400 | 4.0/20 (20.0%) | ~2159 |
 
-**In flight (2026-07-19):** 400-game clock-mode self-play gate confirming the
-time-budget rework didn't cost strength. Expected outcome is "no significant
-difference," which is a pass — the change exists to stop wasting clock, and the
-evidence it works is the replay instrument, not this match.
+Three independent levels agreeing within 47 Elo — the mutual consistency is
+stronger evidence than any single level's error bar, since the model is
+answering the same question from very different score ratios.
+
+**Quality, graded by Stockfish** over 43 games (depth 14): ACPL 19.5, blunder
+rate 0.4% (5 in 1289 moves). For scale, the ~2930-rated opponents in that set
+averaged 6.8 ACPL.
+
+> **📌 Lichess rating — pending.** The first 47 games were casual, so no rated
+> rating exists yet. The bot was redeployed rated on 2026-07-20; a provisional
+> figure needs ~10 games and a stable one a few dozen. Fill in once available:
+> - Blitz / Rapid rating: `________`
+> - Rated games played / W-L-D: `________`
+> - Profile: https://lichess.org/@/PyCheckmate
 
 **What's left**
-- King safety in the evaluation (largest known eval gap).
-- Node-effort-based early stopping (designed, gated on the time work paying off).
-- Self-calibrated Elo + matchmaking bounds.
+- Texel tuning of the 34 hand-picked search/eval constants — none has ever been
+  fitted to data. The largest single known gain (~50–100 Elo typical).
+- King safety in the evaluation (largest known eval gap; half the blunders fall
+  in moves 16–30, right where the opening book runs out).
+- Incremental evaluation, updating material/PST deltas inside make/unmake
+  instead of rescanning — removes the 22% evaluation slice at its root.
+- Collapsing the dual move pipeline (`for_ai` + `make_ai_move` alongside `Move`
+  + `make_move`; 64 references, every invariant maintained twice).
 - Opening book owned by the engine rather than the bridge.
 
 **What "done" looks like.** The engine plays rated blitz unattended without
 crashing, flagging, or hanging pieces to the horizon effect, at a stable rating
-I can actually quote. Most of that is met; the rating number is the gap.
+I can actually quote. The engineering side of that is met, and the strength
+number now exists (~2133); what remains is letting the rated deployment produce
+a public Lichess rating to match it.
 
 ---
 
@@ -421,11 +655,36 @@ I can actually quote. Most of that is met; the rating number is the gap.
    explaining *why* it failed. The stability comment is the most useful thing in
    that file: it stops the next person rebuilding it.
 
-5. **The bug that mattered was invisible to playing the game.** Two nodes wrong
+5. **Check that your data can answer your question before analysing it.** I
+   built three increasingly sophisticated analysis tools on top of 43 games
+   that were structurally incapable of measuring anything — every one played
+   casual, so matchmaking paired a 2133 engine against 2928 opponents, where an
+   1800 and a 2400 engine both score ~0%. No amount of downstream
+   sophistication recovers a signal that was never sampled. The fix was one
+   config line; finding it meant reading the raw API response instead of the
+   scoreboard.
+
+6. **"Rewrite it in the faster representation" is a hypothesis, not a plan.**
+   The obvious fix for a slow Python engine is bitboards. Measured, our mailbox
+   engine is *17% faster than python-chess's bitboards* on CPython — because
+   the bitboard win is a C win, and in Python every bitwise op allocates.
+   Profiling then capped the entire theoretical gain at 1.6× anyway. The
+   instinct behind the request was right; the mechanism would have made things
+   worse.
+
+7. **You cannot debug what you cannot see.** The engine shipped without a
+   single UCI `info` line. Adding them took an hour and immediately surfaced a
+   bug that had been silently capping every movetime-based test at depth 5 —
+   and then a second one, where the search was discarding a third of its clock.
+   Both had been invisible for weeks while I ran ever-more-elaborate offline
+   analysis against a black box.
+
+8. **The bug that mattered was invisible to playing the game.** Two nodes wrong
    out of 4.8 million — undetectable by watching games, unhittable by
    hand-written tests, found instantly by one number that had a known correct
    value. Since then, every subsystem got an exact-value test if one existed.
 
 ---
 
-_Last updated: 2026-07-19 — 400-game time-management gate in progress._
+_Last updated: 2026-07-20 — engine calibrated at ~2133 Elo; redeployed rated
+with automated per-game Stockfish analysis running alongside the bot._
