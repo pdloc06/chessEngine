@@ -85,6 +85,26 @@ def test_piece_sets_are_discovered():
     assert 'standard' in sets and 'neo' in sets, sets
 
 
+def test_assets_load_from_any_working_directory(tmp_path, monkeypatch):
+    """
+    Assets resolve against the package, not the shell's current directory.
+
+    The loaders used to build `Path('pieces')` relative to the CWD, so the
+    game only started when launched from the repo root. Running the whole
+    load from an empty temp directory is what catches a regression back to
+    a relative path -- from the repo root, a broken path still works.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    assert 'standard' in graphics.list_piece_sets()
+
+    graphics.load_pieces_images('standard')
+    assert has_opaque_pixels(config.IMAGES['wK'])
+
+    graphics.load_eval_icons()
+    assert has_opaque_pixels(config.EVAL_ICONS_LOG['best'])
+
+
 def test_every_eval_icon_renders():
     """Every review badge named by EVAL_ICON_NAMES loads at both sizes."""
     graphics.load_eval_icons()

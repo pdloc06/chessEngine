@@ -14,6 +14,13 @@ import pygame as pg
 import config
 from engine import chess_engine
 
+# Asset directories, resolved absolutely from this file rather than from the
+# working directory, so the game loads its art no matter where it is launched
+# from. `engine/uci_client.py` resolves the project root the same way.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PIECES_DIR = PROJECT_ROOT / 'pieces'
+EVAL_ICONS_DIR = PROJECT_ROOT / 'evaluate_icons'
+
 
 def board_to_screen(row: int, col: int, board_flipped: bool) -> tuple[int, int]:
     """
@@ -94,7 +101,7 @@ def load_pieces_images(pieces_type: str | None = None) -> None:
         pieces_type = config.PIECE_SET
     pieces = ['bB', 'bK', 'bN', 'bP', 'bQ', 'bR', 'wB', 'wK', 'wN', 'wP', 'wQ', 'wR']
     for piece in pieces:
-        img_path = Path('pieces') / pieces_type / f'{piece}.svg'
+        img_path = PIECES_DIR / pieces_type / f'{piece}.svg'
         if img_path.exists():
             # Rasterize the vector twice, once per size we cache, rather than
             # scaling one bitmap down. Re-rendering from the source shapes is
@@ -125,7 +132,7 @@ def list_piece_sets() -> list[str]:
     list of str
         The set names, sorted alphabetically (e.g. ['neo', 'standard']).
     """
-    pieces_dir = Path('pieces')
+    pieces_dir = PIECES_DIR
     if not pieces_dir.is_dir():
         return [config.PIECE_SET]
     sets = sorted(
@@ -157,7 +164,7 @@ def load_eval_icons() -> None:
     None
     """
     for name in EVAL_ICON_NAMES:
-        icon_path = Path('evaluate_icons') / f'{name}.svg'
+        icon_path = EVAL_ICONS_DIR / f'{name}.svg'
         if not icon_path.exists():
             print(f"Icon not found: {icon_path}")
             continue
