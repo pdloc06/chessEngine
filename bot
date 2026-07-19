@@ -25,7 +25,11 @@ alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 # The watcher is launched through `uv run`, which forks, so the pid the
 # shell sees is a wrapper rather than the python process. Matching on the
 # module path finds the real one and needs no pidfile to go stale.
-watch_procs() { pgrep -f "engine.sf_watch" 2>/dev/null; }
+# Match the long-running watcher only. The shutdown path spawns a short
+# `-m engine.sf_watch --pending` query, which a bare pattern would also
+# match -- making the watcher look alive because we just asked it a
+# question, and leaving stop_watch spinning against its own probe.
+watch_procs() { pgrep -f "engine.sf_watch --since" 2>/dev/null; }
 watch_alive() { [ -n "$(watch_procs)" ]; }
 
 stop_watch() {
