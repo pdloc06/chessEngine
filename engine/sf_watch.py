@@ -57,6 +57,11 @@ DEFAULT_OUTPUT = os.path.expanduser(
     '~/.local/share/pycheckmate/game_analysis.jsonl')
 DEFAULT_LOG = os.path.expanduser('~/.local/share/pycheckmate/sf_watch.log')
 
+# Records when each engine build was first deployed, so `--since auto` can put
+# the cut at the *version change* rather than at process start. Restarting the
+# bot must not orphan a game that finished just before the last shutdown.
+DEFAULT_CUTS = os.path.expanduser('~/.local/share/pycheckmate/version_cuts.json')
+
 # Depth 14 rather than sf_review's 16: this runs opportunistically between
 # games, and finishing a game's analysis before the next one starts matters
 # more here than the last increment of precision. Validated against Lichess's
@@ -75,6 +80,74 @@ ENGINE_PROCESS_PATTERN = 'engine.uci'
 IDLE_GRACE_SECONDS = 20
 
 CLOCK_PATTERN = re.compile(r'\[%clk\s+(\d+):(\d+):(\d+(?:\.\d+)?)\]')
+
+
+def engine_version() -> str:
+    """
+    Identify the engine build that is currently deployed.
+
+    Every record carries this. Without it the analysis file silently mixes
+    engine versions, and an average over two different engines describes
+    neither — the same failure that made the first 43 games uninterpretable,
+    one level down. Game PGNs carry no version marker of their own, so it has
+    to be stamped at analysis time by a watcher that is started alongside the
+    bot it is grading.
+
+    Returns
+    -------
+    str
+        Short git revision, with ``-dirty`` appended when the working tree
+        has uncommitted changes; ``'unknown'`` outside a git checkout.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        rev = subprocess.run(['git', '-C', root, 'rev-parse', '--short', 'HEAD'],
+                             capture_output=True, text=True, timeout=10)
+        if rev.returncode != 0:
+            return 'unknown'
+        dirty = subprocess.run(['git', '-C', root, 'status', '--porcelain'],
+                               capture_output=True, text=True, timeout=10)
+        suffix = '-dirty' if dirty.stdout.strip() else ''
+        return rev.stdout.strip() + suffix
+    except (OSError, subprocess.TimeoutExpired):
+        return 'unknown'
+
+
+def version_cut(version: str, cuts_path: str) -> float:
+    """
+    Find when this engine build was first deployed, recording it if new.
+
+    `--since now` would be wrong across restarts: a game that finished
+    moments before a `bot down` would be skipped forever by the next
+    `bot up`. Anchoring the cut to the *version* instead means a restart
+    picks up exactly where it left off, while a new build still starts a
+    clean set.
+
+    Parameters
+    ----------
+    version : str
+        Engine build label.
+    cuts_path : str
+        JSON file mapping version -> first-seen epoch timestamp.
+
+    Returns
+    -------
+    float
+        Epoch timestamp from which games belong to this build.
+    """
+    cuts: dict[str, float] = {}
+    if os.path.exists(cuts_path):
+        try:
+            with open(cuts_path, encoding='utf-8') as handle:
+                cuts = json.load(handle)
+        except (json.JSONDecodeError, OSError):
+            cuts = {}
+    if version not in cuts:
+        cuts[version] = time.time()
+        os.makedirs(os.path.dirname(cuts_path) or '.', exist_ok=True)
+        with open(cuts_path, 'w', encoding='utf-8') as handle:
+            json.dump(cuts, handle, indent=2)
+    return cuts[version]
 
 
 def log(message: str, log_path: str) -> None:
@@ -197,7 +270,8 @@ def seconds_spent(clocks: list[float], index: int, increment: float) -> float:
     return max(0.0, clocks[index - 2] - clocks[index] + increment)
 
 
-def analyse(path: str, engine: UciEngineClient, depth: int) -> dict | None:
+def analyse(path: str, engine: UciEngineClient, depth: int,
+            version: str) -> dict | None:
     """
     Grade one finished game and return everything worth keeping about it.
 
@@ -209,6 +283,9 @@ def analyse(path: str, engine: UciEngineClient, depth: int) -> dict | None:
         A ready Stockfish client.
     depth : int
         Fixed search depth per position.
+    version : str
+        Engine build that played the game; stamped into the record so an
+        analysis file can never silently average two different engines.
 
     Returns
     -------
@@ -299,6 +376,7 @@ def analyse(path: str, engine: UciEngineClient, depth: int) -> dict | None:
 
     return {
         'file': os.path.basename(path),
+        'engine_version': version,
         'analysed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         'mtime': os.path.getmtime(path),
         'depth': depth,
@@ -335,24 +413,59 @@ def main() -> None:
     parser.add_argument('--poll', type=int, default=POLL_SECONDS)
     parser.add_argument('--once', action='store_true',
                         help='analyse the backlog and exit, ignoring the bot')
+    parser.add_argument('--version', default='',
+                        help='engine build label (default: current git rev)')
+    parser.add_argument('--cuts', default=DEFAULT_CUTS)
+    parser.add_argument('--pending', action='store_true',
+                        help='print how many games still need analysing, then '
+                             'exit. Used by `bot down` to tell whether it is '
+                             'safe to stop without losing a record.')
+    parser.add_argument('--since', default='',
+                        help='ignore games older than this: "auto" (when this '
+                             'engine build was first deployed -- the right '
+                             'choice for a service), "now", an epoch '
+                             'timestamp, or "YYYY-MM-DD HH:MM:SS". Games played '
+                             'by an earlier engine must be excluded, not '
+                             'averaged in with the current one.')
     args = parser.parse_args()
+
+    version = args.version or engine_version()
+    since = 0.0
+    if args.since == 'auto':
+        since = version_cut(version, args.cuts)
+    elif args.since == 'now':
+        since = time.time()
+    elif args.since:
+        try:
+            since = float(args.since)
+        except ValueError:
+            since = time.mktime(time.strptime(args.since, '%Y-%m-%d %H:%M:%S'))
+
+    def pending_games() -> list[str]:
+        done = already_done(args.output)
+        return [p for p in sorted(
+                    (os.path.join(args.records, f)
+                     for f in os.listdir(args.records) if f.endswith('.pgn')),
+                    key=os.path.getmtime)
+                if os.path.basename(p) not in done
+                and os.path.getmtime(p) >= since]
+
+    if args.pending:
+        print(len(pending_games()))
+        return
 
     os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
     os.makedirs(os.path.dirname(args.log) or '.', exist_ok=True)
 
-    log(f'watching {args.records} -> {args.output} (depth {args.depth})',
-        args.log)
+    cut = (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(since))
+           if since else 'all games')
+    log(f'watching {args.records} -> {args.output} '
+        f'(depth {args.depth}, version {version}, from {cut})', args.log)
 
     engine: UciEngineClient | None = None
     try:
         while True:
-            done = already_done(args.output)
-            pending = [p for p in sorted(
-                          (os.path.join(args.records, f)
-                           for f in os.listdir(args.records)
-                           if f.endswith('.pgn')),
-                          key=os.path.getmtime)
-                       if os.path.basename(p) not in done]
+            pending = pending_games()
 
             if pending and (args.once or not bot_is_playing()):
                 if not args.once:
@@ -368,7 +481,7 @@ def main() -> None:
 
                 path = pending[0]
                 try:
-                    record = analyse(path, engine, args.depth)
+                    record = analyse(path, engine, args.depth, version)
                 except EngineClientError as exc:
                     # Stockfish died; drop the client so the next pass
                     # respawns it, and try this game again then.
