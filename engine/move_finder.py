@@ -70,6 +70,33 @@ DRAW_SCORE = 0
 # pawn beyond the pieces' individual values.
 BISHOP_PAIR_BONUS = 30
 
+# --- Piece quality -----------------------------------------------------
+# Until these, the evaluation understood pawns and rooks but barely knew
+# anything about knights and bishops: mobility and a pair bonus, nothing else.
+# That is a real blind spot rather than a refinement — a first rated loss turned
+# on scoring a bishop-vs-knight endgame move at +37 that Stockfish put ~200cp
+# the other way (see ENGINE_V2_PLAN.md Part 8).
+#
+# A bishop is "bad" in proportion to how many of its *own* pawns sit on the
+# squares it can never leave — they block its diagonals and cannot be defended
+# by it. Counting own pawns on the bishop's colour is the standard cheap
+# formulation. The penalty is per pawn, so a bishop behind a fixed five-pawn
+# chain is heavily discounted while one on an open board is untouched.
+BAD_BISHOP_PENALTY = 4
+
+# A knight is strongest on a square the enemy can never challenge with a pawn,
+# defended by one of ours. Nimzowitsch's original definition also wanted a
+# half-open file; engines generally drop that and keep "advanced, defended,
+# pawn-safe", which is what this does. The bonus is deliberately smaller than
+# the outpost's reputation suggests: it stacks with the piece-square tables,
+# which already reward advanced central knights.
+KNIGHT_OUTPOST_BONUS = 18
+# Rows (from White's view, row 0 = rank 8) where an outpost is worth scoring.
+# Rank 4-6 for White is rows 4-2; anything further back is not an outpost, and
+# rank 7+ is usually a tactical accident rather than a stable square.
+OUTPOST_ROWS_WHITE = (2, 3, 4)
+OUTPOST_ROWS_BLACK = (3, 4, 5)
+
 # Rook activity: rooks earn their keep on files the pawns have
 # vacated. A semi-open file (own pawns gone) gives the rook targets; a fully
 # open file gives it the whole board; the 7th rank attacks the enemy's pawn
@@ -1463,6 +1490,16 @@ def evaluate(gs: GameState) -> int:
     black_file_pawns = [0] * 10
     white_rooks: list[tuple[int, int]] = []
     black_rooks: list[tuple[int, int]] = []
+    # Knight and bishop squares, for the outpost and bad-bishop terms. Both
+    # need the *finished* pawn picture, so they are scored after these loops
+    # rather than inside them.
+    white_knights: list[tuple[int, int]] = []
+    black_knights: list[tuple[int, int]] = []
+    white_bishop_squares: list[int] = []   # square colour, (row + col) & 1
+    black_bishop_squares: list[int] = []
+    # Own pawns per square colour, indexed [0] dark / [1] light by (row+col)&1.
+    white_pawns_on: list[int] = [0, 0]
+    black_pawns_on: list[int] = [0, 0]
 
     for row, col in gs.white_pieces:
         piece = board[row][col]
@@ -1473,6 +1510,7 @@ def evaluate(gs: GameState) -> int:
         if piece_type == PAWN:
             white_pawns.append((row, col))
             white_file_pawns[col + 1] += 1
+            white_pawns_on[(row + col) & 1] += 1
             if row > white_max_row[col + 1]:
                 white_max_row[col + 1] = row
         else:
@@ -1480,8 +1518,11 @@ def evaluate(gs: GameState) -> int:
             score += MOBILITY_BONUS[piece_type] * _mobility(board, row, col, piece_type, True)
             if piece_type == BISHOP:
                 white_bishops += 1
+                white_bishop_squares.append((row + col) & 1)
             elif piece_type == ROOK:
                 white_rooks.append((row, col))
+            elif piece_type == KNIGHT:
+                white_knights.append((row, col))
 
     for row, col in gs.black_pieces:
         piece = board[row][col]
@@ -1493,6 +1534,7 @@ def evaluate(gs: GameState) -> int:
         if piece_type == PAWN:
             black_pawns.append((row, col))
             black_file_pawns[col + 1] += 1
+            black_pawns_on[(row + col) & 1] += 1
             if row < black_min_row[col + 1]:
                 black_min_row[col + 1] = row
         else:
@@ -1500,13 +1542,52 @@ def evaluate(gs: GameState) -> int:
             score -= MOBILITY_BONUS[piece_type] * _mobility(board, row, col, piece_type, False)
             if piece_type == BISHOP:
                 black_bishops += 1
+                black_bishop_squares.append((row + col) & 1)
             elif piece_type == ROOK:
                 black_rooks.append((row, col))
+            elif piece_type == KNIGHT:
+                black_knights.append((row, col))
 
     if white_bishops >= 2:
         score += BISHOP_PAIR_BONUS
     if black_bishops >= 2:
         score -= BISHOP_PAIR_BONUS
+
+    # Bad bishop: every own pawn standing on the bishop's own square colour is
+    # a pawn it can never defend and a diagonal it can never use.
+    for square_colour in white_bishop_squares:
+        score -= BAD_BISHOP_PENALTY * white_pawns_on[square_colour]
+    for square_colour in black_bishop_squares:
+        score += BAD_BISHOP_PENALTY * black_pawns_on[square_colour]
+
+    # Knight outposts: advanced, defended by one of our own pawns, and on a
+    # square no enemy pawn can ever attack.
+    #
+    # White pawns advance towards row 0 and Black's towards row 7, so a *white*
+    # knight on (row, col) is challenged by a black pawn arriving at
+    # (row - 1, col +- 1). Black pawns only ever move to higher rows, so such a
+    # pawn must already sit at or above that square — which is exactly what
+    # `black_min_row` records per file. The same reasoning mirrors for Black.
+    for row, col in white_knights:
+        if row not in OUTPOST_ROWS_WHITE:
+            continue
+        defended = ((row + 1 < 8 and col > 0 and board[row + 1][col - 1] == WP)
+                    or (row + 1 < 8 and col < 7 and board[row + 1][col + 1] == WP))
+        if not defended:
+            continue
+        # Sentinel-padded lists, so col-1 and col+1 need no bounds checks.
+        if black_min_row[col] > row - 1 and black_min_row[col + 2] > row - 1:
+            score += KNIGHT_OUTPOST_BONUS
+
+    for row, col in black_knights:
+        if row not in OUTPOST_ROWS_BLACK:
+            continue
+        defended = ((row - 1 >= 0 and col > 0 and board[row - 1][col - 1] == BP)
+                    or (row - 1 >= 0 and col < 7 and board[row - 1][col + 1] == BP))
+        if not defended:
+            continue
+        if white_max_row[col] < row + 1 and white_max_row[col + 2] < row + 1:
+            score -= KNIGHT_OUTPOST_BONUS
 
     # Doubled/isolated pawns, judged per file. The sentinel columns mean the
     # adjacent-file lookups never need bounds checks, same as the passed-pawn

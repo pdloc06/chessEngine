@@ -124,9 +124,12 @@ down)
             left=$(cd "$ENGINE_DIR" && PYTHONPATH=. uv run --no-project python \
                      -m engine.sf_watch --pending --since auto 2>/dev/null | tail -1)
             case "$left" in ''|*[!0-9]*) left=0 ;; esac
-            busy=0
-            pgrep -f "stockfish" >/dev/null 2>&1 && busy=1
-            [ "$left" -eq 0 ] && [ "$busy" -eq 0 ] && break
+            # Wait on the pending count alone. Checking for a live stockfish
+            # process looks safer but hangs forever: sf_watch keeps one client
+            # alive between games on purpose, so it is idle-but-present most of
+            # the time. A record is only written once a whole game is graded, so
+            # pending==0 already means nothing is mid-analysis.
+            [ "$left" -eq 0 ] && break
             printf "\rwaiting for Stockfish analysis... %d game(s) left  %dm%02ds" \
                 "$left" $((waited / 60)) $((waited % 60))
             sleep 10
