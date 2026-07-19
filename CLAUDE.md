@@ -81,32 +81,53 @@ reports node count *and* time:
   ~85% of runtime the change doesn't touch.
 
 **Behaviour changes** (pruning that can change a result, evaluation terms, move
-ordering) — self-play A/B match:
-`uv run --no-project python -m engine.abtest "<baseline worktree>" 400`.
+ordering, anything touching the clock) — **play real games on Lichess.** This is
+the standard workflow now; self-play is a smoke test, not a verdict.
 
-- **400 games minimum.** 100 games resolve nothing finer than ±70 Elo while real
-  search changes are worth 10–30, so a 100-game verdict is noise wearing a
-  number.
-- The baseline is a detached git worktree parked at the last **kept** commit;
-  advance it after each keep.
-- Fixed movetime (0.2s) for search/eval changes.
-- **Never run two matches concurrently** — CPU contention corrupts both.
-- Engines load their code at spawn, so editing the working tree mid-match is
-  safe.
-- Commit each stage separately, then `git revert` if its match is clearly
-  negative — mixed uncommitted edits are miserable to unpick.
+1. Commit the change, then `bot up` — matchmaking on, `challenge_mode: casual`.
+2. **Record the version cut immediately**: the exact restart timestamp, in the
+   `lichess-game-records-version-cut` memory. PGNs in
+   `<lichess-bot clone>/game_records/` carry no version marker, so file mtime is
+   the *only* way to tell which engine played a game. Written down after the
+   games pile up, it cannot be reconstructed.
+3. Leave it running. It stays up until Lucas says `bot down` — do not stop it to
+   check on it, and do not restart it to tweak config (see the bot-config
+   protocol: batch edits, exactly one down/up cycle).
+4. After `bot down`, analyse: `engine.tm_replay` over the new set versus the
+   previous one, comparing unspent clock at game end and the per-band error
+   rates from `analysis.classify_move`.
+5. Repeat for the next change.
 
-**Time-management changes** are the awkward third case: redistributing the clock
-*is* a behaviour change, so node counts say nothing, but a fixed movetime
-removes the very thing being tuned. They need clock-mode self-play — expensive,
-and low-resolution for the question. Prefer instruments that observe the
-mechanism directly (does the engine spend longer on positions it historically
-blundered?) and demote self-play to a final regression gate.
+Why real games rather than a self-play match: they are played at the actual
+deployed time controls, against varied real opponents, and every move is graded
+against outcomes the engine actually suffered. A match returns one scalar; a set
+of real games says *where* the engine lost and *what it was doing with its
+clock* when it did. Real blunders are also the only labels not contaminated by
+our own guesses — hand-picked "hard" positions have been measured backwards.
 
-`selfplay.DEPTH` must stay above what the movetime can actually reach. It was 6,
-which let searches end on the ply cap rather than the clock in 4 of 7 realistic
-positions — a faster engine then has nowhere to spend its speed and measures as
-0 Elo however much it helps.
+**The self-play clock-fidelity trap** — why the time-management gate was
+abandoned twice. `LOW_CLOCK_SECONDS` (25s) and `PANIC_CLOCK_SECONDS` (10s) are
+*absolute* thresholds, so a scaled-down test clock moves them to a completely
+different point in the game:
+
+| Test clock | Hoarding tier engages |
+| --- | --- |
+| 90+0 | move 39 — inside the moves-21-40 band the change targets |
+| 300+0 (deployed) | move 60 — clear of it |
+
+A 90+0 match therefore measures a version of the change that partially cancels
+itself, and it read −45 Elo for exactly that reason. Testing at the real control
+costs 24–48h for ±50/±35 Elo. **Any self-play clock that is not the deployed
+clock is measuring different code paths than the ones that ship.**
+
+`engine.abtest` still exists for quick sanity checks (`abtest "<baseline
+worktree>" <games>`; games are played in colour-reversed pairs from a shared
+8-ply book, which is what makes the variance survivable). If it is ever used for
+a real verdict again: 400 games minimum, never two matches concurrently, and
+`selfplay.DEPTH` must stay above what the movetime can actually reach — it was
+6, which let searches end on the ply cap rather than the clock in 4 of 7
+realistic positions, so a faster engine had nowhere to spend its speed and
+measured as 0 Elo however much it helped.
 
 ## Tests
 
