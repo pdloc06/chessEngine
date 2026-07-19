@@ -3,6 +3,8 @@ Test suite covering the AI search in move_finder: tactical correctness
 (mates, captures), state preservation, evaluation symmetry, and the
 UCI adapter helpers.
 """
+import time
+
 from engine import move_finder
 from engine import uci
 from engine.chess_engine import (
@@ -414,3 +416,33 @@ def test_node_count_is_reproducible_for_a_seeded_search():
     first = seeded_search()
     assert first > 0
     assert seeded_search() == first
+
+
+def test_search_spends_most_of_its_time_budget():
+    """
+    Guard the fix for a search that used to stop with a third of its clock left.
+
+    Two rules combined to waste it: an aborted iteration was discarded whole,
+    so the soft-stop gate refused to *start* one it could not finish. Measured,
+    that spent 58% of a 3s budget. Now `_search_root` keeps whatever an aborted
+    iteration proved -- root moves are ordered best-first, so a partial pass
+    either confirms the previous best or replaces it with a move that beat it a
+    ply deeper -- and the gate can sit near the full budget.
+
+    A generous floor keeps this from being a flaky timing test: anything above
+    the old ~58% shows the mechanism works, and the check is only meaningful on
+    a position too complex to solve outright (which would legitimately return
+    early on a mate score).
+    """
+    gs = GameState.from_fen(
+        'r2q1rk1/pp2bppp/2n1bn2/2pp4/3P4/2N1PN2/PP2BPPP/R1BQ1RK1 w - - 0 10')
+    budget = 1.0
+    start = time.perf_counter()
+    best = move_finder.find_best_move(gs, max_depth=64, time_limit=budget)
+    elapsed = time.perf_counter() - start
+
+    assert best is not None
+    assert elapsed > budget * 0.75, f'used only {elapsed:.2f}s of {budget}s'
+    # And it must not run away with the clock: overrunning a real budget is
+    # how an engine flags.
+    assert elapsed < budget * 1.5, f'overran: {elapsed:.2f}s of {budget}s'

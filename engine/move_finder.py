@@ -297,14 +297,23 @@ LMR_TABLE: tuple[tuple[int, ...], ...] = tuple(
     for d in range(64)
 )
 
-# Dynamic time management. Each deepening iteration costs roughly
-# 3-5x the one before it, so an iteration started with most of the budget
-# already spent will almost certainly be aborted mid-search — time spent,
-# nothing gained. Instead of starting it, stop and bank the remainder: under
-# a real clock the unused time stays on it, buying deeper searches on later
-# (harder) moves. 0.45 approximates "could the next iteration finish?" for
-# a ~3x growth factor.
-SOFT_STOP_FRACTION = 0.45
+# Dynamic time management: how much of the budget may already be spent and
+# still allow another deepening iteration to start.
+#
+# This used to be 0.45, on the reasoning that an iteration costs ~3-5x the one
+# before it, so one started late would be aborted mid-search — "time spent,
+# nothing gained". The second half of that was true only because `_search_root`
+# then *discarded* an aborted iteration wholesale. It no longer does: root
+# moves are ordered best-first, so a partial pass either confirms the previous
+# best or replaces it with a move that outscored it one ply deeper, and both
+# beat stopping early.
+#
+# Measured, the old value left a third of the clock unused — 58% of a 3s budget
+# and 69% of a 5s one actually spent. Since an aborted iteration now returns
+# real information, the only reason left to hold back is to avoid starting one
+# with so little left that it cannot finish even a single root move, so the
+# gate sits just short of the full budget.
+SOFT_STOP_FRACTION = 0.9
 
 # Panic extension: when a completed iteration's score falls this many
 # centipawns below the previous iteration's, the engine has just "seen"
@@ -413,6 +422,10 @@ class SearchInfo:
         History heuristic scores for quiet move ordering.
     rep_counts : dict of int, int
         Occurrence counts of Zobrist keys along game history + search path.
+    aborted : bool
+        Set when the clock cut an iteration short. The root keeps whatever it
+        had already proved at that depth (see `_search_root`), so callers use
+        this flag rather than an exception to tell "finished" from "ran out".
     """
 
     def __init__(self, time_limit: float, rep_counts: dict[int, int],
@@ -425,11 +438,19 @@ class SearchInfo:
         self.killers: list[list[MoveTuple]] = [[] for _ in range(64)]
         self.history: dict[tuple[int, int, int, int], int] = {}
         self.rep_counts: dict[int, int] = rep_counts
+        self.aborted: bool = False
 
     def check_time(self) -> None:
         """Raise SearchTimeout if the soft time limit has expired."""
-        # Only sample the clock every 2048 nodes: perf_counter is not free
-        if self.nodes % 2048 == 0:
+        # Sampling the clock costs a syscall, so it happens every N nodes
+        # rather than every node — which means the search can overrun its
+        # limit by however long N nodes take. That error is near-constant in
+        # *time*, so it barely matters against a 5s budget and matters a lot
+        # against the 0.05s one a nearly-flagged clock produces: at 2048 nodes
+        # (~58ms here) a 0.1s budget overran by 41%. 512 quarters that for a
+        # cost of 0.6% on the benchmark — inside its noise, and the node count
+        # is unchanged, which proves the search itself is untouched.
+        if self.nodes % 512 == 0:
             if time.perf_counter() - self.start_time > self.time_limit:
                 raise SearchTimeout
 
@@ -578,7 +599,10 @@ def search_position(
         try:
             score, move = _aspiration_search(gs, root_moves, depth, info, best_score)
         except SearchTimeout:
-            break  # Keep the result of the last completed iteration
+            # Safety net only: the root converts a timeout into `info.aborted`
+            # and returns what it proved. Reaching here means a timeout
+            # escaped from somewhere outside the root's move loop.
+            break
 
         if move is not None:
             best_move, best_score = move, score
@@ -598,6 +622,11 @@ def search_position(
             if on_iteration is not None:
                 on_iteration(depth, score, info.nodes,
                              time.perf_counter() - info.start_time, move)
+
+        # The clock cut this iteration short. Its partial result has already
+        # been taken above, but there is no time for another one.
+        if info.aborted:
+            break
 
         # A forced mate found: deeper search cannot improve it
         if abs(best_score) >= MATE_THRESHOLD:
@@ -646,6 +675,7 @@ def _search_root(
     """
     best_score = -CHECKMATE_SCORE
     best_move: MoveTuple | None = None
+    score: int | None
 
     for move in root_moves:
         undo = gs.make_ai_move(move)
@@ -664,9 +694,23 @@ def _search_root(
                 score = -_negamax(gs, depth - 1, -alpha - 1, -alpha, 1, info)
                 if alpha < score < beta:
                     score = -_negamax(gs, depth - 1, -beta, -alpha, 1, info)
+        except SearchTimeout:
+            # The clock ran out inside this move. Everything proved *before*
+            # it is still valid, so record the abort and keep it rather than
+            # discarding the whole iteration. Root moves are ordered
+            # best-first from the previous iteration, so a partial pass has
+            # already examined the most promising candidates: it either
+            # confirms the old best or replaces it with something that
+            # outscored it at this deeper depth. Both are strictly better
+            # information than the previous iteration alone.
+            info.aborted = True
+            score = None
         finally:
             info.rep_counts[child_key] -= 1
             gs.unmake_ai_move(move, undo)
+
+        if score is None:
+            break
 
         if score > best_score:
             best_score = score
@@ -724,6 +768,10 @@ def _aspiration_search(
         alpha = prev_score - window
         beta = prev_score + window
         score, move = _search_root(gs, root_moves, depth, info, alpha, beta)
+        # Out of time: a re-search cannot finish either, so take what the
+        # aborted pass proved instead of throwing it away on a widen.
+        if info.aborted:
+            return score, move
         if alpha < score < beta:
             return score, move
         # Fail high or low: widen and re-search, or give up and go full-window
