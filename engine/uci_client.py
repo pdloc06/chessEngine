@@ -27,6 +27,11 @@ UCI_MODULE_ARGS = ['-m', 'engine.uci']
 # engine unresponsive (protocol handshakes use it directly)
 RESPONSE_GRACE = 5.0
 
+# A fixed-depth analysis has no movetime to derive a deadline from, so the
+# lock wait gets its own generous bound — a deep Stockfish search on a
+# complex position can legitimately take a while.
+ANALYSIS_TIMEOUT = 120.0
+
 
 class EngineClientError(Exception):
     """Raised when the engine process dies or breaks protocol."""
@@ -189,6 +194,90 @@ class UciEngineClient:
         if len(parts) < 2 or parts[1] in ('(none)', '0000'):
             raise EngineClientError(f'engine returned no move: {reply!r}')
         return parts[1]
+
+    def analyse(self, uci_moves: list[str], depth: int) -> tuple[str, int, bool]:
+        """
+        Search a position and return the *score* as well as the best move.
+
+        `search_from_moves` throws away the `info` lines and keeps only
+        `bestmove`, which is all a player needs. An analyst needs the
+        evaluation, so this keeps the last score reported before the engine
+        committed to its move. Written for driving Stockfish as a reference
+        engine (`engine.sf_review`), but it is plain UCI and works against
+        our own engine too.
+
+        Parameters
+        ----------
+        uci_moves : list[str]
+            Every move from the start position to the one being analysed.
+        depth : int
+            Fixed search depth. Depth rather than time keeps the numbers
+            reproducible across runs and machines.
+
+        Returns
+        -------
+        tuple of (str, int, bool)
+            `(best_move, score, is_mate)`. `score` is centipawns from the
+            **side to move's** perspective, or, when `is_mate` is True, the
+            number of moves to mate (signed the same way). Callers must
+            convert to a common perspective themselves.
+
+        Raises
+        ------
+        EngineClientError
+            If the engine dies or reports no score at all.
+        """
+        if not self._lock.acquire(timeout=ANALYSIS_TIMEOUT):
+            raise EngineClientError('engine is busy past its deadline')
+        try:
+            position = 'position startpos'
+            if uci_moves:
+                position += ' moves ' + ' '.join(uci_moves)
+            self._send(position)
+            self._send(f'go depth {depth}')
+
+            # Keep the most recent score seen; the last one before `bestmove`
+            # is the deepest completed iteration's verdict.
+            score: int | None = None
+            is_mate = False
+            if self._proc.stdout is None:
+                raise EngineClientError('engine has no stdout pipe')
+            while True:
+                line = self._proc.stdout.readline()
+                if line == '':
+                    raise EngineClientError('engine process closed its output')
+                line = line.strip()
+                if line.startswith('bestmove'):
+                    break
+                if ' score ' in line:
+                    parts = line.split()
+                    kind = parts[parts.index('score') + 1]
+                    value = int(parts[parts.index('score') + 2])
+                    score, is_mate = value, kind == 'mate'
+        finally:
+            self._lock.release()
+
+        if score is None:
+            raise EngineClientError(f'engine reported no score: {line!r}')
+        parts = line.split()
+        best = parts[1] if len(parts) > 1 else '0000'
+        return best, score, is_mate
+
+    def set_option(self, name: str, value: str | int) -> None:
+        """
+        Set a UCI option (e.g. Stockfish's ``Threads`` or ``Hash``).
+
+        Parameters
+        ----------
+        name : str
+            Option name, exactly as the engine spells it.
+        value : str or int
+            Value to set.
+        """
+        with self._lock:
+            self._send(f'setoption name {name} value {value}')
+            self._send('isready')
+            self._read_until('readyok')
 
     def close(self) -> None:
         """Shut the engine down, escalating politely: quit -> kill."""
