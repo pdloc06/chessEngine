@@ -14,6 +14,13 @@ import pygame as pg
 import config
 from engine import chess_engine
 
+# Asset directories, resolved absolutely from this file rather than from the
+# working directory, so the game loads its art no matter where it is launched
+# from. `engine/uci_client.py` resolves the project root the same way.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PIECES_DIR = PROJECT_ROOT / 'pieces'
+EVAL_ICONS_DIR = PROJECT_ROOT / 'evaluate_icons'
+
 
 def board_to_screen(row: int, col: int, board_flipped: bool) -> tuple[int, int]:
     """
@@ -94,13 +101,19 @@ def load_pieces_images(pieces_type: str | None = None) -> None:
         pieces_type = config.PIECE_SET
     pieces = ['bB', 'bK', 'bN', 'bP', 'bQ', 'bR', 'wB', 'wK', 'wN', 'wP', 'wQ', 'wR']
     for piece in pieces:
-        img_path = Path('pieces') / pieces_type / f'{piece}.png'
+        img_path = PIECES_DIR / pieces_type / f'{piece}.svg'
         if img_path.exists():
-            raw_image = pg.image.load(img_path)
-            config.IMAGES[piece] = pg.transform.smoothscale(raw_image, (config.SQ_SIZE, config.SQ_SIZE))
+            # Rasterize the vector twice, once per size we cache, rather than
+            # scaling one bitmap down. Re-rendering from the source shapes is
+            # what keeps the tiny captured-material icon sharp instead of a
+            # blurred downsample. This runs at startup only, so 24 renders cost
+            # nothing worth optimizing away.
+            config.IMAGES[piece] = pg.image.load_sized_svg(
+                img_path, (config.SQ_SIZE, config.SQ_SIZE)
+            )
             # A second, tiny copy for the captured-material row in the player bars
-            config.SMALL_IMAGES[piece] = pg.transform.smoothscale(
-                raw_image, (config.CAPTURED_ICON_SIZE, config.CAPTURED_ICON_SIZE)
+            config.SMALL_IMAGES[piece] = pg.image.load_sized_svg(
+                img_path, (config.CAPTURED_ICON_SIZE, config.CAPTURED_ICON_SIZE)
             )
         else:
             print(f"Image not found for piece: {piece}")
@@ -119,12 +132,12 @@ def list_piece_sets() -> list[str]:
     list of str
         The set names, sorted alphabetically (e.g. ['neo', 'standard']).
     """
-    pieces_dir = Path('pieces')
+    pieces_dir = PIECES_DIR
     if not pieces_dir.is_dir():
         return [config.PIECE_SET]
     sets = sorted(
         entry.name for entry in pieces_dir.iterdir()
-        if entry.is_dir() and (entry / 'wK.png').exists()
+        if entry.is_dir() and (entry / 'wK.svg').exists()
     )
     return sets or [config.PIECE_SET]
 
@@ -151,16 +164,20 @@ def load_eval_icons() -> None:
     None
     """
     for name in EVAL_ICON_NAMES:
-        icon_path = Path('evaluate_icons') / f'{name}_128x.png'
+        icon_path = EVAL_ICONS_DIR / f'{name}.svg'
         if not icon_path.exists():
             print(f"Icon not found: {icon_path}")
             continue
-        raw_icon = pg.image.load(icon_path)
-        config.EVAL_ICONS_LOG[name] = pg.transform.smoothscale(
-            raw_icon, (config.EVAL_ICON_LOG_SIZE, config.EVAL_ICON_LOG_SIZE)
+        # As with the pieces, each size is rendered from the vector directly.
+        # Note these icons have a 18x19 viewBox, and load_sized_svg preserves
+        # the source aspect ratio rather than stretching to fill the request,
+        # so the surfaces come back a hair narrower than tall. Both blit sites
+        # position by rect, so that costs nothing.
+        config.EVAL_ICONS_LOG[name] = pg.image.load_sized_svg(
+            icon_path, (config.EVAL_ICON_LOG_SIZE, config.EVAL_ICON_LOG_SIZE)
         )
-        config.EVAL_ICONS_BOARD[name] = pg.transform.smoothscale(
-            raw_icon, (config.EVAL_ICON_BOARD_SIZE, config.EVAL_ICON_BOARD_SIZE)
+        config.EVAL_ICONS_BOARD[name] = pg.image.load_sized_svg(
+            icon_path, (config.EVAL_ICON_BOARD_SIZE, config.EVAL_ICON_BOARD_SIZE)
         )
 
 def cache_coordinate_fonts(coord_font: pg.font.Font) -> None:
