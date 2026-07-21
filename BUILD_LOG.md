@@ -453,6 +453,64 @@ situation a nearly-flagged clock produces. Sampling every 512 nodes quartered
 it for 0.6% on the benchmark, **with the node count unchanged** — which is the
 proof that the search itself was untouched.
 
+### A negative result expired without anyone noticing (2026-07-21)
+
+Best-move stability — narrowing the time gate when successive search
+iterations keep returning the same root move — was built, measured, and
+deleted months earlier. It scored 1.11x against the crude panic rule's 1.34x
+on the question "does the engine think longer on positions it actually
+blundered". A comment was left in front of `PANIC_SCORE_DROP` recording both
+the verdict and the reason:
+
+> in quiet endgames the root best move flaps between moves of *identical*
+> score, so it reads as maximally unstable exactly where there is least to
+> think about
+
+When the Phase 1 plan called for building it again, that comment was the
+reason to *check* rather than the reason to skip. The check said the premise
+was gone. Ties can no longer displace the incumbent: `_search_root` compares
+with a strict `score > best_score` and searches the previous iteration's best
+move first, so an equal-scoring rival is examined second and loses. Measured
+over 12 positions and 84 iteration transitions:
+
+| positions | best-move change rate | equal-score changes |
+| --- | --- | --- |
+| quiet | 2% | **0** |
+| sharp | 24% | **0** |
+
+The flapping the note describes is now literally zero, and the signal
+discriminates 12x in the direction it was supposed to. Nobody set out to fix
+it — it fell out of an unrelated change that reordered root moves best-first
+so aborted iterations could be kept.
+
+Rebuilt on that basis, the gate now slides from 0.9 down to 0.5 of the budget,
+one step per consecutive stable iteration, with panic overriding it outright.
+Share of a 3s budget actually spent:
+
+| | off | on |
+| --- | --- | --- |
+| quiet | 100.3% | **71.9%** |
+| sharp | 100.4% | 95.5% |
+
+It takes clock from positions with nothing left to find and leaves sharp ones
+alone — which is the behavior the first attempt was aiming at and got
+backwards.
+
+**The transferable lesson is about the shape of the record, not about chess.**
+A measured negative result is only valid while the code it measured still
+exists, and nothing announces when that stops being true. What made the
+expiry detectable was that the note recorded the *mechanism* rather than the
+verdict. Had it said "tried best-move stability, measured worse, don't
+rebuild", skipping would have been correct on the evidence available and wrong
+in fact — and the error would have been invisible, because a thing not built
+produces no symptom.
+
+One caveat kept deliberately: this measures **clock reallocation, not Elo**.
+The original experiment's 1.36x-vs-1.34x result is a fair warning that the
+signal working does not mean the change is worth anything. Returning time to
+the endgame only pays if the endgame spends it well, and only the rated-games
+run can say.
+
 ---
 
 ## Performance Benchmarks
@@ -644,16 +702,23 @@ a public Lichess rating to match it.
 
 3. **My intuitions about my own code were wrong more often than they were
    right.** I expected attack detection to be the hotspot; it was evaluation. I
-   expected best-move stability to identify hard positions; it identified quiet
-   endgames flapping between equal moves. I hand-labelled two test positions and
+   expected best-move stability to identify hard positions; at the time it
+   identified quiet endgames flapping between equal moves (it does now identify
+   hard positions — see takeaway 4). I hand-labelled two test positions and
    got both *backwards*. Every one of those was caught by measuring, and none of
    them would have been caught by reading the code.
 
-4. **Negative results are worth committing.** Three features were built,
-   measured, and deleted — LMP (−60 Elo), countermove+IIR (unproven), best-move
-   stability (1.11x vs the crude rule's 1.34x). Each left behind a comment
-   explaining *why* it failed. The stability comment is the most useful thing in
-   that file: it stops the next person rebuilding it.
+4. **Negative results are worth committing — and they expire.** Three features
+   were built, measured, and deleted — LMP (−60 Elo), countermove+IIR
+   (unproven), best-move stability (1.11x vs the crude rule's 1.34x). Each left
+   behind a comment explaining *why* it failed, and that "why" is the load-
+   bearing part. In 2026-07 best-move stability was rebuilt and worked, because
+   an unrelated change had removed the exact mechanism the old comment blamed —
+   and the comment naming that mechanism is the only reason anyone noticed. A
+   note saying "tried it, measured worse, don't rebuild" would have been
+   obeyed, correctly on the evidence and wrongly in fact. **A negative result
+   is a statement about code that existed at the time, not a law**, and a thing
+   not built produces no symptom to alert you.
 
 5. **Check that your data can answer your question before analysing it.** I
    built three increasingly sophisticated analysis tools on top of 43 games
