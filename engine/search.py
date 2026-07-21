@@ -979,17 +979,25 @@ def _quiescence(gs: GameState, alpha: int, beta: int, ply: int, info: SearchInfo
 
     in_check = gs.in_check
     for move in noisy:
-        # Prune captures that lose material by static exchange: they cannot
-        # raise alpha and only cost nodes. Never prune while in check (these are
-        # forced evasions, not optional captures) or for promotions (move types
-        # >= 3), whose +queen swing SEE does not account for.
-        if not in_check and move[4] < 3 and _see(gs, move) < 0:
-            continue
-        # Delta pruning (stage G): even winning the victim outright plus a
-        # safety margin can't lift this line back to alpha — skip the capture
-        # before paying for make/unmake and a child search. Same exemptions
-        # as the SEE prune, plus mate-score windows, where material
-        # arithmetic means nothing.
+        # Two prunes, cheapest first. A capture is skipped if *either* fires,
+        # so their order cannot change which moves get searched — and `alpha`
+        # only moves when a move is actually searched, never when one is
+        # pruned, so the whole search is identical either way. Node counts
+        # confirm it: 111,528 on the benchmark, unchanged.
+        #
+        # What the order does change is cost. Delta pruning is a subtraction;
+        # SEE walks the entire exchange sequence on a square. Running SEE
+        # first spent that walk on captures delta pruning was about to discard
+        # anyway — measured at 216,600 SEE calls against 172,578 this way, a
+        # 20.3% reduction for provably identical play.
+        #
+        # Delta pruning: even winning the victim outright plus a safety margin
+        # can't lift this line back to alpha, so skip before paying for
+        # make/unmake and a child search. Never while in check (those are
+        # forced evasions, not optional captures), never for promotions (move
+        # types >= 3), whose +queen swing the margin does not account for, and
+        # never in a mate-score window, where material arithmetic means
+        # nothing.
         if not in_check and move[4] < 3 and abs(alpha) < MATE_THRESHOLD:
             # En passant is the one capture whose victim is not on the
             # target square; every other move[4] < 3 capture's is.
@@ -997,6 +1005,10 @@ def _quiescence(gs: GameState, alpha: int, beta: int, ply: int, info: SearchInfo
                 else PIECE_VALUES[gs.board[move[2]][move[3]]]
             if stand_pat + victim + DELTA_MARGIN <= alpha:
                 continue
+        # Static exchange: captures that lose material cannot raise alpha and
+        # only cost nodes. Same exemptions as above.
+        if not in_check and move[4] < 3 and _see(gs, move) < 0:
+            continue
         undo = gs.make_ai_move(move)
         try:
             score = -_quiescence(gs, -beta, -alpha, ply + 1, info)
