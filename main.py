@@ -21,7 +21,7 @@ from engine.movegen import generate_legal
 from engine.search import find_best_move
 from engine.tt import TTable
 
-# Type alias matching move_finder's lightweight move format
+# Type alias matching movegen's lightweight move format
 MoveTuple = tuple[int, int, int, int, int]
 
 # Shared UCI engine subprocess (PyPy-hosted when available, see uci_client).

@@ -16,7 +16,7 @@ import random
 
 import pytest
 
-import engine.search as move_finder
+import engine.search as search
 from engine.board import GameState, Move
 from engine.eval import MOPUP_MIN_ADVANTAGE, evaluate
 from engine.search import find_best_move

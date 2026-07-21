@@ -25,7 +25,7 @@ from engine.board import (
     WB, WK, WN, WP, WQ, WR,
 )
 
-# Type alias for the lightweight move format shared with chess_engine
+# Type alias for the lightweight move format the search expands
 MoveTuple = tuple[int, int, int, int, int]
 
 

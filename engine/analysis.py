@@ -47,7 +47,7 @@ from engine.eval import CHECKMATE_SCORE, MATE_THRESHOLD, PIECE_VALUES
 from engine.search import search_position
 from engine.movegen import generate_legal
 
-# Type alias matching move_finder's lightweight move format
+# Type alias matching movegen's lightweight move format
 MoveTuple = tuple[int, int, int, int, int]
 
 # Move-quality tags. The values double as the evaluate_icons/ file stems the

@@ -17,7 +17,7 @@ accepts challenges, and posts moves in **UCI coordinate notation** (`e2e4`,
 of it and talks to your engine over the **UCI protocol** (stdin/stdout text).
 
 ```
-Lichess servers  <—HTTPS/JSON—>  lichess-bot (Python bridge)  <—UCI text—>  engine/uci.py  —>  engine/move_finder.py + engine/chess_engine.py
+Lichess servers  <—HTTPS/JSON—>  lichess-bot (Python bridge)  <—UCI text—>  engine/uci.py  —>  engine/search.py + engine/eval.py + engine/board.py
 ```
 
 The engine side of that contract is four things, all in `engine/`:

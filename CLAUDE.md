@@ -13,7 +13,7 @@ The project is uv-managed (`pyproject.toml` + `uv.lock` + `.python-version`); `u
 ```bash
 uv run main.py                      # Run the game (opens the menu, needs a display)
 uv run pytest tests/ -q             # Run the full test suite
-uv run pytest tests/test_move_finder.py -q                  # One file
+uv run pytest tests/test_search.py -q                        # One file
 uv run pytest tests/test_ai_interface.py::test_perft_initial_position -q   # One test
 uv run mypy main.py config.py engine/ gui/ tests/           # Type check (config in mypy.ini)
 uv run --no-project python -m engine.uci                    # UCI engine REPL
@@ -43,22 +43,38 @@ Git pushes must use SSH (`git@github.com:pdloc06/PyCheckmate.git`); the HTTPS re
 
 ## Architecture
 
-Two packages and a thin root, connected by narrow contracts. `engine/` is pure stdlib (never import pygame there — that's what lets it run under PyPy); `gui/` + `main.py` + `config.py` are the CPython/pygame side.
+Two packages and a thin root, connected by narrow contracts. `engine/` is pure stdlib (never import pygame there — that's what lets it run under PyPy); `gui/` + `main.py` + `config.py` are the CPython/pygame side. Measurement and operations tooling lives in `engine/tools/`, which imports the engine but is never imported by it.
 
-**`engine/chess_engine.py`** — all rules state. `GameState` holds the board as `list[list[int]]` of small integer piece codes (`0`=empty, `1-6`=white P/N/B/R/Q/K, `7-12`=black), row 0 = rank 8 (Black home). `0 < piece < 7` tests colour and `PIECE_TYPE[piece]` recovers a colour-independent 1-6 type index; `CODE_TO_INT`/`INT_TO_CODE` convert to the legacy `'wP'`/`'--'` strings only at the FEN, SAN/UCI, and GUI-image boundaries. There are **two parallel move pipelines**:
+The engine's modules form a strict chain, and keeping it acyclic is a rule rather than an accident:
 
-- *UI path*: `get_valid_moves()` returns `Move` objects; the game applies them only via `gs.make_move(move)`, which maintains `move_log`, `state_log`, repetition counts, and does a full Zobrist recompute. Undo via `unmake_move()`.
-- *AI path* (hot loop): `get_valid_moves(for_ai=True)` returns 5-tuples `(start_row, start_col, end_row, end_col, move_type)` where type 0=normal, 1=castle, 2=en-passant, 3–6=promotion Q/R/B/N. Search executes them with `make_ai_move()`/`unmake_ai_move()`, which skip the logs, update the Zobrist key incrementally, and return a 5-tuple undo package `(captured_piece, old_enpassant, old_castle_rights, old_zobrist, old_halfmove_clock)`. `for_ai=True` still skips threefold hashing — the search layer handles repetition itself via `zobrist_history` — but `halfmove_clock` **is** maintained on this path. It was not until 2026-07-21, and the omission meant the search could not see the 50-move rule at all: in a won position with no progress move it scored +300 while the game drifted to a draw, and because equal-scored root moves get shuffled it did so by playing apparently random moves. `move_finder` reads the clock in two places — a hard `DRAW_SCORE` at 100, and `_fade_toward_draw()`, which scales the static evaluation linearly to zero between half-move 40 and 100 so the search gets a gradient it can act on long before the limit. The fade is applied in the search, never inside `evaluate()`, because `_EVAL_CACHE` is keyed on the Zobrist key alone and `halfmove_clock` is not part of that key.
+```
+board  <-  movegen  <-  eval  <-  search
+```
+
+`board` imports none of the others, so a cycle can only appear by adding an import that points backwards along that chain.
+
+**`engine/board.py`** — board state and attack detection. `GameState` holds the board as `list[list[int]]` of small integer piece codes (`0`=empty, `1-6`=white P/N/B/R/Q/K, `7-12`=black), row 0 = rank 8 (Black home). `0 < piece < 7` tests colour and `PIECE_TYPE[piece]` recovers a colour-independent 1-6 type index; `CODE_TO_INT`/`INT_TO_CODE` convert to the legacy `'wP'`/`'--'` strings only at the FEN, SAN/UCI, and GUI-image boundaries. There are **two parallel move pipelines**:
+
+Attack detection (`check_pins_checks()`, `is_square_attacked()`, `squares_safe_for_castle()`) lives here rather than in `movegen`, because pins and checks are properties of a position and `make_move` needs them to annotate check for SAN. That placement is what keeps the dependency one-way.
+
+**`engine/movegen.py`** — legal move generation, as **free functions taking a `GameState`**, not methods: `generate_legal(gs, for_ai=..., captures_only=...)` and `generate_captures(gs)`. Free functions are what let `board` stay ignorant of `movegen`; a mixin would have forced an import back the other way. There are **two parallel move pipelines**:
+
+- *UI path*: `generate_legal(gs)` returns `Move` objects; the game applies them only via `gs.make_move(move)`, which maintains `move_log`, `state_log`, repetition counts, and does a full Zobrist recompute. Undo via `unmake_move()`.
+- *AI path* (hot loop): `generate_legal(gs, for_ai=True)` returns 5-tuples `(start_row, start_col, end_row, end_col, move_type)` where type 0=normal, 1=castle, 2=en-passant, 3–6=promotion Q/R/B/N. Search executes them with `make_ai_move()`/`unmake_ai_move()`, which skip the logs, update the Zobrist key incrementally, and return a 5-tuple undo package `(captured_piece, old_enpassant, old_castle_rights, old_zobrist, old_halfmove_clock)`. `for_ai=True` still skips threefold hashing — the search layer handles repetition itself via `zobrist_history` — but `halfmove_clock` **is** maintained on this path. It was not until 2026-07-21, and the omission meant the search could not see the 50-move rule at all: in a won position with no progress move it scored +300 while the game drifted to a draw, and because equal-scored root moves get shuffled it did so by playing apparently random moves. `search` reads the clock in two places — a hard `DRAW_SCORE` at 100, and `_fade_toward_draw()`, which scales the static evaluation linearly to zero between half-move 40 and 100 so the search gets a gradient it can act on long before the limit. The fade is applied in the search, never inside `evaluate()`, because `_EVAL_CACHE` is keyed on the Zobrist key alone and `halfmove_clock` is not part of that key.
 
 The two paths meet at `Move.from_ai_tuple(tuple, board)` / `Move.to_ai_tuple()`: an AI result must be converted to a `Move` and applied through `gs.make_move()` so animation/move-log/undo stay in sync — never apply `make_ai_move()` to the real game state. Both `make_ai_move` and `unmake_ai_move` must keep `white_pieces`/`black_pieces` sets exact (move generation iterates those sets, not the board); `tests/test_ai_interface.py` has a random-walk regression test for this.
 
 `GameState.from_fen()`/`to_fen()`, `Move.get_uci_notation()`, `make_null_move()`, and `refresh_derived_state()` (rebuilds all derived caches from a hand-set board — used by test fixtures) round out the interface. Zobrist tables are module-level, deterministically seeded.
 
-**`engine/move_finder.py`** — the search, operating purely on the tuple interface: iterative-deepening negamax with alpha-beta, transposition table keyed by `gs.zobrist_key`, quiescence search, MVV-LVA/killer/history move ordering, null-move pruning, check extension. Entry point: `find_best_move(gs, valid_moves=None, max_depth=4, time_limit=5.0) -> MoveTuple | None`. Evaluation (`evaluate()`) is material + piece-square tables, always from White's perspective. Mate scores use `CHECKMATE_SCORE`/`MATE_THRESHOLD` and are excluded from the TT.
+**`engine/search.py`** — the search, operating purely on the tuple interface: iterative-deepening negamax with alpha-beta, transposition table keyed by `gs.zobrist_key`, quiescence search, MVV-LVA/killer/history move ordering, null-move pruning, check extension. Entry point: `find_best_move(gs, valid_moves=None, max_depth=4, time_limit=5.0) -> MoveTuple | None`. Mate scores use `CHECKMATE_SCORE`/`MATE_THRESHOLD` and are excluded from the TT. `_root_rng` shuffles equal-scored root moves, which is why node counts only reproduce when it is seeded — `engine/tools/bench.py` does exactly that.
 
-**`engine/pgn.py`** — PGN/SAN import (pure stdlib). SAN tokens are resolved by *matching* against `get_valid_moves()` rather than re-implementing rules; `game_from_pgn()` replays a full PGN into a `GameState` with an intact `move_log`. `looks_like_fen()` is the import screen's FEN-vs-PGN discriminator.
+**`engine/eval.py`** — static evaluation: material + piece-square tables (always from White's perspective), mobility, pawn structure, rook activity, bishop/knight quality, king shelter, and a mop-up term that converts won pawnless endgames. `evaluate()` must stay a **pure function of the position**, because `_EVAL_CACHE` is keyed on the Zobrist key alone — anything varying independently of the pieces (the 50-move clock is the live example) belongs in `search`, not here.
 
-**`engine/analysis.py`** — chess.com-style game review (pure stdlib). Scores are converted to win% (logistic curve) and each move is graded by win% loss: `best/excellent/good/inaccuracy/mistake/blunder` ladder plus `brilliant` (sound sacrifice, via a lightweight attacker-scan heuristic), `great_find` (only good move, verified by a second search excluding the best move), `missed_win`, `book` (small SAN-line opening table, built lazily), and `forced`. Tag string values double as `evaluate_icons/` file stems. `GameAnalysis` runs the whole-game loop on a daemon thread (one search per position; `evals[i]` = position before move i) and supports appending exploration moves mid-analysis; `move_finder.search_position()` is the score-returning search variant it builds on.
+**`engine/tt.py`** — the transposition-table contract: entry layout `(depth, flag, score, best_move, generation)` and the three flags. Deliberately not a class; the probe runs at every node and a method call there would cost more than it explains.
+
+**`engine/pgn.py`** — PGN/SAN import (pure stdlib). SAN tokens are resolved by *matching* against `generate_legal()` rather than re-implementing rules; `game_from_pgn()` replays a full PGN into a `GameState` with an intact `move_log`. `looks_like_fen()` is the import screen's FEN-vs-PGN discriminator.
+
+**`engine/analysis.py`** — chess.com-style game review (pure stdlib). Scores are converted to win% (logistic curve) and each move is graded by win% loss: `best/excellent/good/inaccuracy/mistake/blunder` ladder plus `brilliant` (sound sacrifice, via a lightweight attacker-scan heuristic), `great_find` (only good move, verified by a second search excluding the best move), `missed_win`, `book` (small SAN-line opening table, built lazily), and `forced`. Tag string values double as `evaluate_icons/` file stems. `GameAnalysis` runs the whole-game loop on a daemon thread (one search per position; `evals[i]` = position before move i) and supports appending exploration moves mid-analysis; `search.search_position()` is the score-returning search variant it builds on.
 
 **`engine/uci.py` + `engine/uci_client.py`** — the engine-as-a-process pair. `uci.py` is a UCI stdin/stdout adapter (run as `python -m engine.uci` from the repo root); it's the Lichess bot path. `uci_client.py` is the host side: it spawns `engine.uci` under PyPy (found on PATH or via `uv python find pypy`) and speaks UCI to it.
 
@@ -94,7 +110,7 @@ equivalent pruning) — `uv run --no-project python -m engine.tools.bench`:
   node totals across the bench positions mean the search made every same
   decision, so the change cannot have altered how the engine plays. Guarded by
   `test_node_count_is_reproducible_for_a_seeded_search`.
-- This only works because the bench seeds `move_finder._root_rng`. The root
+- This only works because the bench seeds `search._root_rng`. The root
   shuffle changes how much the search prunes, so unseeded counts do not
   reproduce and the whole method silently stops working.
 - Time is noisy (~29% run-to-run on this machine). Take best-of-5, run the two

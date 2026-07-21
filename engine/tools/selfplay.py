@@ -13,7 +13,7 @@ code path the Lichess bridge uses), so anything that breaks here breaks online
 too. The driver itself is the referee: it holds the authoritative `GameState`,
 asks the side-to-move engine for a move, and **fails loudly on any illegal move
 or engine crash**. Games vary between runs because the search shuffles
-equal-scoring root moves (`_root_rng` in `move_finder.py`), so no opening book is
+equal-scoring root moves (`_root_rng` in `engine/search.py`), so no opening book is
 needed to avoid replaying one game 20 times.
 
 Run it (CPython host spawning PyPy engines, when PyPy is available):

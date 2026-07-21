@@ -137,8 +137,12 @@ uv run --no-project python -m engine.tools.selfplay        # 20 games (pass a nu
 | `main.py` | Game driver: menu, event loop, turn handling, threaded AI |
 | `config.py` | Layout, theme, and AI settings |
 | `engine/` | The headless engine package (pure stdlib, PyPy-compatible) |
-| `engine/chess_engine.py` | Game state and rules: board, move generation, make/unmake, FEN, Zobrist hashing |
-| `engine/move_finder.py` | The AI search and evaluation |
+| `engine/board.py` | Board state and rules: make/unmake, attack detection, FEN, Zobrist hashing |
+| `engine/movegen.py` | Legal and capture generation, as free functions over a `GameState` |
+| `engine/eval.py` | Static evaluation: material, piece-square tables, positional terms |
+| `engine/search.py` | The AI search: negamax, quiescence, ordering, time management |
+| `engine/tt.py` | Transposition-table entry layout and flags |
+| `engine/tools/` | Measurement and operations tooling (bench, calibrate, sprt, sf_watch) |
 | `engine/analysis.py` | Game review: move grading, win-percent model, accuracy |
 | `engine/pgn.py` | PGN/SAN and FEN import for the analysis screen |
 | `engine/uci.py` | UCI protocol adapter for running the engine outside the GUI |

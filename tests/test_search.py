@@ -1,5 +1,5 @@
 """
-Test suite covering the AI search in move_finder: tactical correctness
+Test suite covering the AI search in engine.search: tactical correctness
 (mates, captures), state preservation, evaluation symmetry, and the
 UCI adapter helpers.
 """
