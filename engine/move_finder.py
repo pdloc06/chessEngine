@@ -193,7 +193,7 @@ KING_SHIELD_BONUS = 12
 #
 # The classical cure is two terms, and neither is about the position being
 # good; they are about making *progress* measurable. Drive the losing king to
-# the edge (it is mated at the rim, never in the centre) and walk the winning
+# the edge (it is mated at the rim, never in the center) and walk the winning
 # king towards it (almost every basic mate needs the king's help).
 #
 # Weights are in tenths so the term stays integer. They were *measured*, not
@@ -212,7 +212,7 @@ KING_SHIELD_BONUS = 12
 # loses the win. The ceiling is 12*6 + 3*13 = ~111cp, which is loud enough to
 # steer a flat position but still nowhere near the 400cp the gate already
 # requires, so it can never argue with material.
-MOPUP_CORNER_WEIGHT = 120         # per unit of the losing king's centre distance
+MOPUP_CORNER_WEIGHT = 120         # per unit of the losing king's center distance
 MOPUP_KING_PROXIMITY_WEIGHT = 30  # per unit the kings are closer than 14 apart
 
 # Only chase when the advantage is actually mateable. A lone bishop or knight
@@ -221,19 +221,110 @@ MOPUP_KING_PROXIMITY_WEIGHT = 30  # per unit the kings are closer than 14 apart
 # natural floor: it admits K+R, K+Q and K+B+N, and excludes the rest.
 MOPUP_MIN_ADVANTAGE = 400
 
-# Centre-manhattan distance: 0 on the four middle squares, 6 in the corners.
+# Center-manhattan distance: 0 on the four middle squares, 6 in the corners.
 # The losing king's mate chances shrink as this grows, which is exactly the
 # gradient the search is missing.
-#
-# Known limitation: K+B+N vs K is not covered and still fails to convert.
-# That mate has to drive the king to a corner *of the bishop's own color*,
-# which needs a second, color-specific table rather than this symmetric one.
-# Left out deliberately — it is the rarest mate in practical play and did not
-# appear once in the 101 recorded games. Add the table if it ever does.
-_CENTRE_MANHATTAN: tuple[tuple[int, ...], ...] = tuple(
+_CENTER_MANHATTAN: tuple[tuple[int, ...], ...] = tuple(
     tuple(max(3 - row, row - 4) + max(3 - col, col - 4) for col in range(8))
     for row in range(8)
 )
+
+# --- K+B+N vs K, the one mate that needs its own map ---------------------
+# Every other basic mate works against *any* corner, which is why the
+# symmetric table above is enough for them. Bishop and knight is the
+# exception: the bishop only ever controls one square color, so the mate
+# only exists in the two corners of that color. Driving the king to the
+# wrong corner is not a slower win, it is no win at all — the king walks out
+# — so this case needs a table that knows which corner it is aiming for.
+#
+# The gradient is Stockfish's `PushToCorners`, copied rather than invented.
+# A corner-distance formula sounds like it should work and does not: the
+# useful gradient also has to pull along the a1-h8 diagonal the bishop
+# travels, which is why d4 and e5 score above e4 and d5 here. Getting that
+# shape right by hand is exactly the kind of tuning that is already solved.
+#
+# Indexed the way Stockfish indexes it, a1 = 0 through h8 = 63, and peaking
+# at a1 and h8 — both dark. A light-squared bishop mirrors the file, which
+# maps those peaks onto h1 and a8.
+_PUSH_TO_CORNERS: tuple[int, ...] = (
+    6400, 6080, 5760, 5440, 5120, 4800, 4480, 4160,
+    6080, 5760, 5440, 5120, 4800, 4480, 4160, 4480,
+    5760, 5440, 4960, 4480, 4160, 3840, 4480, 4800,
+    5440, 5120, 4480, 3840, 3520, 4160, 4800, 5120,
+    5120, 4800, 4160, 3520, 3840, 4480, 5120, 5440,
+    4800, 4480, 3840, 4160, 4480, 4960, 5440, 5760,
+    4480, 4160, 4480, 4800, 5120, 5440, 5760, 6080,
+    4160, 4480, 4800, 5120, 5440, 5760, 6080, 6400,
+)
+_PUSH_MIN, _PUSH_RANGE = 3520, 6400 - 3520
+
+# Weight in tenths, matching the mop-up terms above. This one is allowed to
+# be far louder than they are: in K+B+N vs K there is no other gradient at
+# all to compete with, and the mate needs ~33 moves of accurate play against
+# a 50-move budget, so a timid pull simply runs out the clock.
+#
+# Known limitation, measured rather than assumed: this table makes K+B+N vs K
+# *better* but still does not convert it reliably. Playing the mate out from
+# a standard start, over independent root-shuffle seeds:
+#
+#   depth 4    never converts
+#   depth 6    never converts, even given 110 moves
+#   depth 8    4 of 6 seeds, one of those landing on ply 99 of 100
+#   depth 10   3 of 3 on one set of seeds, but a fourth seed hit the 50-move
+#              rule exactly — so "reliable at depth 10" is not supported
+#
+# What the table does fix is the direction: before it, the symmetric mop-up
+# happily parked the king in a corner the bishop cannot cover, which is not a
+# slow win but no win at all. Now the king is driven to a corner the bishop
+# controls, and the mate arrives some of the time instead of none of it.
+#
+# Finishing it properly needs the actual technique (the W-maneuver), which is
+# a special-case driver rather than an evaluation term — a gradient cannot
+# express "triangulate here". Left undone deliberately: K+B+N did not occur
+# once in the 101 recorded games, and lichess-bot answers 4-piece endings from
+# the online tablebase (`online_egtb`, max_pieces 8) whenever it has more than
+# 20 seconds on the clock, so the engine is rarely asked this question at all.
+KBNK_CORNER_WEIGHT = 3000
+
+# Total non-pawn material that identifies K+B+N exactly. With no pawns on the
+# board 650 can only be one bishop plus one knight — two bishops make 660,
+# two knights 640, and a rook 500.
+KBNK_MATERIAL = 650
+
+
+def _build_kbnk_pull(weight: int) -> tuple[tuple[tuple[int, ...], ...], ...]:
+    """
+    Precompute the corner pull for both bishop colors, in tenths of a pawn.
+
+    Baked into a table at import so the hot path is a plain lookup rather
+    than a rescale. Exposed as a function purely so a tuning run can rebuild
+    it at a different weight.
+
+    Parameters
+    ----------
+    weight : int
+        Value in tenths of a centipawn to award at the best corner.
+
+    Returns
+    -------
+    tuple
+        Indexed `[bishop_square_color][row][col]`, where square color is
+        `(row + col) & 1` — 1 being the dark color the raw table peaks on.
+    """
+    return tuple(
+        tuple(
+            tuple(
+                (_PUSH_TO_CORNERS[(7 - row) * 8 + (col if color else 7 - col)]
+                 - _PUSH_MIN) * weight // _PUSH_RANGE
+                for col in range(8)
+            )
+            for row in range(8)
+        )
+        for color in (0, 1)
+    )
+
+
+_KBNK_PULL = _build_kbnk_pull(KBNK_CORNER_WEIGHT)
 
 # Piece-square tables (white's perspective, row 0 = rank 8).
 # Values follow Tomasz Michniewski's "Simplified Evaluation Function".
@@ -1718,17 +1809,27 @@ def evaluate(gs: GameState) -> int:
         advantage = white_material - black_material
         if advantage >= MOPUP_MIN_ADVANTAGE:
             loser_row, loser_col = bk_row, bk_col
+            winner_material, loser_material = white_material, black_material
+            winner_bishops = white_bishop_squares
             sign = 1
         elif -advantage >= MOPUP_MIN_ADVANTAGE:
             loser_row, loser_col = wk_row, wk_col
+            winner_material, loser_material = black_material, white_material
+            winner_bishops = black_bishop_squares
             sign = -1
         else:
             sign = 0
         if sign:
             proximity = 14 - (abs(wk_row - bk_row) + abs(wk_col - bk_col))
+            if (loser_material == 0 and winner_material == KBNK_MATERIAL
+                    and winner_bishops):
+                # Bishop and knight: aim at the corners this bishop can
+                # actually cover, not at whichever one happens to be nearest.
+                pull = _KBNK_PULL[winner_bishops[0]][loser_row][loser_col]
+            else:
+                pull = MOPUP_CORNER_WEIGHT * _CENTER_MANHATTAN[loser_row][loser_col]
             score += sign * (
-                MOPUP_CORNER_WEIGHT * _CENTRE_MANHATTAN[loser_row][loser_col]
-                + MOPUP_KING_PROXIMITY_WEIGHT * proximity
+                pull + MOPUP_KING_PROXIMITY_WEIGHT * proximity
             ) // 10
 
     if len(_EVAL_CACHE) >= _EVAL_CACHE_MAX:

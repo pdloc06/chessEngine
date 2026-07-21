@@ -94,7 +94,27 @@ def test_mopup_stays_quiet_while_pawns_remain(custom_gs):
             > evaluate(rim) - evaluate(centre))
 
 
-def _play_out(gs: GameState, move_limit: int) -> tuple[bool, int]:
+def test_bishop_knight_corners_match_the_bishop_color():
+    """
+    The K+B+N table must aim at corners the bishop can actually cover.
+
+    This is the whole point of having a second table: a bishop only controls
+    one square color, so the mate exists in exactly two corners. Driving the
+    king to either of the other two is not a slower win, it is no win — the
+    king walks straight back out.
+    """
+    dark, light = move_finder._KBNK_PULL[1], move_finder._KBNK_PULL[0]
+    # (row, col) with row 0 = rank 8: a8=(0,0) h8=(0,7) a1=(7,0) h1=(7,7).
+    a8, h8, a1, h1 = (0, 0), (0, 7), (7, 0), (7, 7)
+    for corner in (a1, h8):
+        assert dark[corner[0]][corner[1]] > dark[a8[0]][a8[1]]
+        assert dark[corner[0]][corner[1]] > dark[h1[0]][h1[1]]
+    for corner in (a8, h1):
+        assert light[corner[0]][corner[1]] > light[a1[0]][a1[1]]
+        assert light[corner[0]][corner[1]] > light[h8[0]][h8[1]]
+
+
+def _play_out(gs: GameState, move_limit: int, depth: int = 4) -> tuple[bool, int]:
     """
     Play both sides with the search until mate, stalemate, or a move cap.
 
@@ -104,6 +124,8 @@ def _play_out(gs: GameState, move_limit: int) -> tuple[bool, int]:
         Position to play from; mutated in place.
     move_limit : int
         Maximum plies to play before giving up.
+    depth : int, optional
+        Search depth per move. 4 converts every endgame covered here.
 
     Returns
     -------
@@ -124,7 +146,7 @@ def _play_out(gs: GameState, move_limit: int) -> tuple[bool, int]:
         # Depth-bounded, not clock-bounded: a time limit would make the test
         # search shallower on a loaded machine and convert differently there.
         # Depth 4 in a three-piece endgame finishes far inside this.
-        best = find_best_move(gs, max_depth=4, time_limit=60.0)
+        best = find_best_move(gs, max_depth=depth, time_limit=60.0)
         if best is None:
             return gs.is_checkmate, ply
         gs.make_move(Move.from_ai_tuple(best, gs.board))
