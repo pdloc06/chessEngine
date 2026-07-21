@@ -164,7 +164,12 @@ def version_cut(version: str, cuts_path: str, record: bool = True) -> float:
 
 def log(message: str, log_path: str) -> None:
     """
-    Append one timestamped line to the watcher's log and to stdout.
+    Append one timestamped line to the watcher's log, and echo it to a terminal.
+
+    `bot up` starts the watcher with stdout already redirected into
+    `log_path`, so printing unconditionally wrote every line twice. The
+    print is only useful when a human is watching, which is exactly what
+    `isatty()` tests.
 
     Parameters
     ----------
@@ -178,7 +183,8 @@ def log(message: str, log_path: str) -> None:
     None
     """
     line = f'{time.strftime("%Y-%m-%d %H:%M:%S")} {message}'
-    print(line, flush=True)
+    if sys.stdout.isatty():
+        print(line, flush=True)
     with open(log_path, 'a', encoding='utf-8') as handle:
         handle.write(line + '\n')
 
