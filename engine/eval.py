@@ -56,7 +56,7 @@ BISHOP_PAIR_BONUS = 30
 # anything about knights and bishops: mobility and a pair bonus, nothing else.
 # That is a real blind spot rather than a refinement — a first rated loss turned
 # on scoring a bishop-vs-knight endgame move at +37 that Stockfish put ~200cp
-# the other way (see ENGINE_V2_PLAN.md Part 8).
+# the other way (see docs/ENGINE_V2_PLAN.md Part 8).
 #
 # A bishop is "bad" in proportion to how many of its *own* pawns sit on the
 # squares it can never leave — they block its diagonals and cannot be defended

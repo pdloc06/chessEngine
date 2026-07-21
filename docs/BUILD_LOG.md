@@ -513,7 +513,7 @@ run can say.
 
 ### Staged move ordering: built, measured, reverted (2026-07-21)
 
-`ENGINE_V2_PLAN.md` §5.3 lists staged generation — "yield TT move → captures →
+`docs/ENGINE_V2_PLAN.md` §5.3 lists staged generation — "yield TT move → captures →
 killers → quiets, so a cutoff on the TT move never pays for generating quiets
 at all… a node-count win *and* a time win". Instrumenting the search first
 turned that from a slogan into numbers, over 13,534 generating nodes:

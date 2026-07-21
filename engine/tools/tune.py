@@ -1,7 +1,7 @@
 """
 Texel tuning: fit the evaluation's constants to real game outcomes.
 
-`ENGINE_V2_PLAN.md` mistake M7 is that the evaluation carries ~34 hand-picked
+`docs/ENGINE_V2_PLAN.md` mistake M7 is that the evaluation carries ~34 hand-picked
 numbers and not one of them was ever fitted. This is the tool that fits them.
 
 The method (Peter Osterlund's, hence "Texel") is one idea. Take a large set of

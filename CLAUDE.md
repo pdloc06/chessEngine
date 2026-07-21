@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-PyCheckmate is a personal **learning project**: a Pygame chess game with a from-scratch AI engine, plus a UCI adapter that runs it as a Lichess bot (deployed; operations manual in `LICHESS_BOT.md`). Because it's a learning project, existing explanatory comments must be kept, and new comments/docstrings should be written in the same educational style. All docstrings use **NumPy style** (Parameters/Returns sections).
+PyCheckmate is a personal **learning project**: a Pygame chess game with a from-scratch AI engine, plus a UCI adapter that runs it as a Lichess bot (deployed; operations manual in `docs/LICHESS_BOT.md`). Because it's a learning project, existing explanatory comments must be kept, and new comments/docstrings should be written in the same educational style. All docstrings use **NumPy style** (Parameters/Returns sections).
 
 ## Commands
 
@@ -37,7 +37,7 @@ GUI code can be exercised headlessly with `SDL_VIDEODRIVER=dummy`. PyPy (install
 The Lichess bot is controlled by `bot up` / `bot down` / `bot status` / `bot log`
 (`~/.local/bin/bot`). `bot up` also starts the Stockfish analysis watcher, and
 `bot down` waits for the current game *and* its analysis to finish before
-stopping — `bot down now` skips both waits. Operations manual: `LICHESS_BOT.md`.
+stopping — `bot down now` skips both waits. Operations manual: `docs/LICHESS_BOT.md`.
 
 Git pushes must use SSH (`git@github.com:pdloc06/PyCheckmate.git`); the HTTPS remote has no stored credentials. `gh` CLI is available for PRs.
 
