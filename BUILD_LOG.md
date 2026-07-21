@@ -151,7 +151,7 @@ Ten measured stages (A–J), each committed separately so it could be reverted a
   rating never left the provisional 3000 and matchmaking kept pairing the bot
   with ~2930 opponents. Not an engine result at all.
 - ✅ **First real strength number: ~2133 Elo**, from three Stockfish
-  `UCI_Elo` levels agreeing within 47 points (`engine/calibrate.py`).
+  `UCI_Elo` levels agreeing within 47 points (`engine/tools/calibrate.py`).
 - ✅ **Bitboard rewrite considered and rejected on measurement.** python-chess
   (bitboard) benchmarks *slower* than our mailbox engine in Python.
 - ✅ **UCI `info` output added** — the engine had been unobservable in
@@ -160,9 +160,9 @@ Ten measured stages (A–J), each committed separately so it could be reverted a
   discarded.
 - ✅ **Hoarding thresholds made relative** to the starting clock, retiring the
   trap that voided two overnight gates.
-- ✅ **SPRT harness** (`engine/sprt.py` over fastchess) replacing fixed-N
+- ✅ **SPRT harness** (`engine/tools/sprt.py` over fastchess) replacing fixed-N
   matches.
-- ✅ **Automated per-game Stockfish analysis** (`engine/sf_watch.py`), running
+- ✅ **Automated per-game Stockfish analysis** (`engine/tools/sf_watch.py`), running
   in the bot's idle time and stamped with the engine build.
 - ✅ **Redeployed rated** with opponent bounds around the calibrated rating.
 
@@ -457,7 +457,7 @@ proof that the search itself was untouched.
 
 ## Performance Benchmarks
 
-Measured with `engine.bench` (4 positions: opening / middlegame / tactical /
+Measured with `engine.tools.bench` (4 positions: opening / middlegame / tactical /
 endgame), seeded RNG, best-of-5 back-to-back runs.
 
 | Date | Change | Metric | Before | After | Gain |
@@ -550,11 +550,11 @@ sharply the moment it runs out while the position is still complex.
 
 | Instrument | Question it answers |
 | --- | --- |
-| `engine/bench.py` | Did a score-neutral change stay score-neutral? *Node counts must be identical* — a proof, not a p-value |
-| `engine/sprt.py` | Is version B stronger than version A? Sequential test over fastchess, stops when decisive, declines when neutral |
-| `engine/calibrate.py` | How strong are we in absolute terms? Stockfish pinned by `UCI_LimitStrength` |
-| `engine/sf_review.py` | Where did we go wrong in these games? Independent Stockfish grading |
-| `engine/sf_watch.py` | Same, automatically, in the bot's idle time, stamped with the engine build |
+| `engine/tools/bench.py` | Did a score-neutral change stay score-neutral? *Node counts must be identical* — a proof, not a p-value |
+| `engine/tools/sprt.py` | Is version B stronger than version A? Sequential test over fastchess, stops when decisive, declines when neutral |
+| `engine/tools/calibrate.py` | How strong are we in absolute terms? Stockfish pinned by `UCI_LimitStrength` |
+| `engine/tools/sf_review.py` | Where did we go wrong in these games? Independent Stockfish grading |
+| `engine/tools/sf_watch.py` | Same, automatically, in the bot's idle time, stamped with the engine build |
 | perft suite | Is move generation still exactly correct? |
 
 Two design rules were learned the hard way and now govern all of them: **one

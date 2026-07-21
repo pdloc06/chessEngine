@@ -20,9 +20,9 @@ Game records carry no version marker, so games are bucketed by file mtime
 against `--cut` — see the `lichess-game-records-version-cut` note for the
 timestamps.
 
-    PYTHONPATH=. uv run --no-project python -m engine.sf_review
-    ... -m engine.sf_review --depth 16 --cut "2026-07-19 14:45:10"
-    ... -m engine.sf_review --limit 2          # quick smoke run
+    PYTHONPATH=. uv run --no-project python -m engine.tools.sf_review
+    ... -m engine.tools.sf_review --depth 16 --cut "2026-07-19 14:45:10"
+    ... -m engine.tools.sf_review --limit 2          # quick smoke run
 
 **Do not run a full pass while the bot is playing.** Stockfish will compete
 with the live engine for CPU and degrade the very games being collected.

@@ -186,7 +186,7 @@ shape:
 Before anything goes online:
 
 1. `uv run pytest tests/ -q` — engine correctness (perft, Zobrist, search sanity).
-2. `uv run --no-project python -m engine.selfplay` — spawns two `engine.uci`
+2. `uv run --no-project python -m engine.tools.selfplay` — spawns two `engine.uci`
    processes and plays 20 full games refereed by a `GameState`, exiting non-zero
    on any illegal move or crash. This is the integration coverage perft can't
    give: UCI round-trip, search, make/unmake and game-end detection over

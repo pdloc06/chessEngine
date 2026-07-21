@@ -85,7 +85,7 @@ class UciEngineClient:
     cwd : str, optional
         Working directory for the subprocess. Defaults to this repo's root;
         pointing it at another checkout runs *that* checkout's engine — which
-        is how `engine.sprt` pits two versions against each other.
+        is how `engine.tools.sprt` pits two versions against each other.
 
     Raises
     ------
@@ -203,7 +203,7 @@ class UciEngineClient:
         `bestmove`, which is all a player needs. An analyst needs the
         evaluation, so this keeps the last score reported before the engine
         committed to its move. Written for driving Stockfish as a reference
-        engine (`engine.sf_review`), but it is plain UCI and works against
+        engine (`engine.tools.sf_review`), but it is plain UCI and works against
         our own engine too.
 
         Parameters

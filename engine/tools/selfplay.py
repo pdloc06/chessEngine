@@ -18,8 +18,8 @@ needed to avoid replaying one game 20 times.
 
 Run it (CPython host spawning PyPy engines, when PyPy is available):
 
-    uv run --no-project python -m engine.selfplay        # 20 games (default)
-    uv run --no-project python -m engine.selfplay 5      # 5 games
+    uv run --no-project python -m engine.tools.selfplay        # 20 games (default)
+    uv run --no-project python -m engine.tools.selfplay 5      # 5 games
 
 Exits non-zero if any game ends in an illegal move or a crash, so it doubles as
 a pre-deploy assertion.
@@ -64,7 +64,7 @@ def random_opening(plies: int, rng: random.Random) -> list[str]:
     Build a random legal opening line, as UCI move strings.
 
     Used to give a *pair* of games a shared starting position (see
-    `engine.sprt`). The line does not need to be balanced or sensible —
+    `engine.tools.sprt`). The line does not need to be balanced or sensible —
     because the pair plays it from both sides, any advantage baked into it
     is handed to each engine exactly once and cancels out. What it must be
     is *legal* and *unfinished*, so both games start from a real position

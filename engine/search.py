@@ -191,7 +191,7 @@ _search_generation = 0
 # given the same position, depth and root move order, two versions of this
 # engine visit the same nodes unless their pruning or ordering actually
 # differs. That makes it the right yardstick for changes meant to be
-# score-neutral (see `engine.bench`) — a self-play Elo match cannot resolve
+# score-neutral (see `engine.tools.bench`) — a self-play Elo match cannot resolve
 # anything under ~35 Elo without hundreds of games, while a node count
 # resolves a 1% difference in one run.
 last_search_nodes = 0

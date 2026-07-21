@@ -2,7 +2,7 @@
 Analyse every finished bot game with Stockfish, automatically, as they arrive.
 
 The manual workflow was: run the bot for a day, stop it, then run
-`engine.sf_review` over the whole record directory. That wastes the bot's own
+`engine.tools.sf_review` over the whole record directory. That wastes the bot's own
 idle time -- between games the machine is doing nothing -- and it means the
 analysis only exists when someone is around to start it.
 
@@ -31,8 +31,8 @@ inaccuracy/mistake/blunder ladder, accuracy%, per-phase breakdowns and
 "did we spend time where we went wrong" are all recoverable from it later
 without re-running a single search.
 
-    PYTHONPATH=. uv run --no-project python -m engine.sf_watch
-    ... -m engine.sf_watch --once          # drain the backlog and exit
+    PYTHONPATH=. uv run --no-project python -m engine.tools.sf_watch
+    ... -m engine.tools.sf_watch --once          # drain the backlog and exit
 """
 import argparse
 import json
@@ -44,7 +44,7 @@ import time
 
 from engine import pgn
 from engine.board import GameState
-from engine.sf_review import (
+from engine.tools.sf_review import (
     BLUNDER, DEFAULT_RECORDS, INACCURACY, MAX_CPL, MISTAKE, OUR_NAME,
     SF_HASH_MB, SF_THREADS, find_stockfish, move_accuracy, white_pov,
     win_percent,

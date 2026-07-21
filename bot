@@ -26,19 +26,19 @@ alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 # shell sees is a wrapper rather than the python process. Matching on the
 # module path finds the real one and needs no pidfile to go stale.
 # Match the long-running watcher only. The shutdown path spawns a short
-# `-m engine.sf_watch --pending` query, which a bare pattern would also
+# `-m engine.tools.sf_watch --pending` query, which a bare pattern would also
 # match -- making the watcher look alive because we just asked it a
 # question, and leaving stop_watch spinning against its own probe.
-watch_procs() { pgrep -f "engine.sf_watch --since" 2>/dev/null; }
+watch_procs() { pgrep -f "engine.tools.sf_watch --since" 2>/dev/null; }
 watch_alive() { [ -n "$(watch_procs)" ]; }
 
 stop_watch() {
-    pkill -f "engine.sf_watch" 2>/dev/null
+    pkill -f "engine.tools.sf_watch" 2>/dev/null
     for _ in 1 2 3 4 5; do
         [ -z "$(watch_procs)" ] && break
         sleep 1
     done
-    pkill -9 -f "engine.sf_watch" 2>/dev/null
+    pkill -9 -f "engine.tools.sf_watch" 2>/dev/null
     rm -f "$WATCHPID"
 }
 procs() { pgrep -f "$MATCH" 2>/dev/null; }
@@ -80,7 +80,7 @@ up)
     # the build, so one file can never average two engines.
     mkdir -p "$(dirname "$WATCHLOG")"
     ( cd "$ENGINE_DIR" && PYTHONPATH=. nohup uv run --no-project python -u \
-        -m engine.sf_watch --since auto >> "$WATCHLOG" 2>&1 & )
+        -m engine.tools.sf_watch --since auto >> "$WATCHLOG" 2>&1 & )
     sleep 3
     echo "started (pid $(cat "$PIDFILE")), keeping Mac awake"
     if watch_alive; then
@@ -122,7 +122,7 @@ down)
         waited=0
         while :; do
             left=$(cd "$ENGINE_DIR" && PYTHONPATH=. uv run --no-project python \
-                     -m engine.sf_watch --pending --since auto 2>/dev/null | tail -1)
+                     -m engine.tools.sf_watch --pending --since auto 2>/dev/null | tail -1)
             case "$left" in ''|*[!0-9]*) left=0 ;; esac
             # Wait on the pending count alone. Checking for a live stockfish
             # process looks safer but hangs forever: sf_watch keeps one client

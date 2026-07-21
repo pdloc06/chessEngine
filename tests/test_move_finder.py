@@ -403,7 +403,7 @@ def test_node_count_is_reproducible_for_a_seeded_search():
     """
     Verify the property the benchmark's whole value rests on.
 
-    `engine.bench` compares engine versions by node count rather than by
+    `engine.tools.bench` compares engine versions by node count rather than by
     playing games, because a node count carries no measurement noise — but
     that only holds if a repeated search really does visit the same nodes.
     Two things can break it: the root move shuffle (`_root_rng`), which

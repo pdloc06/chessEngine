@@ -44,7 +44,7 @@ of the others.
 
 ### 1.2 Stockfish says the engine is not actually blundering
 
-Full depth-14 Stockfish pass over all 43 games (`engine/sf_review.py`):
+Full depth-14 Stockfish pass over all 43 games (`engine/tools/sf_review.py`):
 
 | Set | ACPL | Inaccuracies | Mistakes | Blunders | Moves |
 | --- | --- | --- | --- | --- | --- |
@@ -63,7 +63,7 @@ uncontrolled. It is a hint, not a result.)
 
 ### 1.3 Calibration against a known ruler
 
-Since the Lichess sample is uninformative, I built `engine/calibrate.py`:
+Since the Lichess sample is uninformative, I built `engine/tools/calibrate.py`:
 Stockfish with `UCI_LimitStrength` + `UCI_Elo` is a calibrated opponent, so
 bracketing the level where we score 50% gives a real number in an hour.
 
@@ -785,7 +785,7 @@ two in flight. Candidate order, subject to what Stage 1 says:
 4. Bishop-vs-knight imbalance keyed on pawn-structure openness
 5. Rook behind passed pawn; king proximity to passed pawns (endgame)
 
-**Stage 3 — re-calibrate** with `engine/calibrate.py` and compare against the
+**Stage 3 — re-calibrate** with `engine/tools/calibrate.py` and compare against the
 ~2133 baseline.
 
 ### The trap to avoid

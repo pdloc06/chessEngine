@@ -136,7 +136,7 @@ def _play_out(gs: GameState, move_limit: int, depth: int = 4) -> tuple[bool, int
     tuple of (bool, int)
         Whether checkmate was reached, and how many plies it took.
     """
-    # Seed the root shuffle, for the same reason `engine/bench.py` does: it
+    # Seed the root shuffle, for the same reason `engine/tools/bench.py` does: it
     # changes how much the search prunes, so an unseeded playout is a
     # different game every run. Without this the test is exactly as much of a
     # coin flip as the bug it is checking for — measured over 20 seeds, K+R

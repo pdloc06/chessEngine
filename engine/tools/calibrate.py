@@ -16,8 +16,8 @@ executioner. Bracketing the level where we score 50% gives a real number,
 with a real error bar, in an hour on one machine — no Lichess account, no
 rating volatility, no waiting a day for 43 games.
 
-    PYTHONPATH=. uv run --no-project python -m engine.calibrate
-    ... -m engine.calibrate --levels 1400,1800 --games 10
+    PYTHONPATH=. uv run --no-project python -m engine.tools.calibrate
+    ... -m engine.tools.calibrate --levels 1400,1800 --games 10
 
 Read the output as a bracket, not a rating: with `--games 20` per level the
 95% band is roughly +-160 Elo, which is enough to tell 1500 from 2000 and
@@ -28,8 +28,8 @@ import argparse
 import math
 import sys
 
-from engine.selfplay import DEPTH, play_game, random_opening
-from engine.sf_review import find_stockfish
+from engine.tools.selfplay import DEPTH, play_game, random_opening
+from engine.tools.sf_review import find_stockfish
 from engine.uci_client import UciEngineClient, resolve_engine_command
 import random
 

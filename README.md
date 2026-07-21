@@ -97,8 +97,8 @@ pygame. Without PyPy the AI simply searches in-process; set
 interpreters yourself with the included benchmark:
 
 ```bash
-uv run --no-project python -m engine.bench                # CPython
-uv run --no-project -p pypy3.11 python -m engine.bench    # PyPy
+uv run --no-project python -m engine.tools.bench                # CPython
+uv run --no-project -p pypy3.11 python -m engine.tools.bench    # PyPy
 ```
 
 ## Running the engine over UCI
@@ -127,7 +127,7 @@ test plays two engine processes against each other and fails on any illegal move
 or crash:
 
 ```bash
-uv run --no-project python -m engine.selfplay        # 20 games (pass a number to change)
+uv run --no-project python -m engine.tools.selfplay        # 20 games (pass a number to change)
 ```
 
 ## Project layout
@@ -143,8 +143,8 @@ uv run --no-project python -m engine.selfplay        # 20 games (pass a number t
 | `engine/pgn.py` | PGN/SAN and FEN import for the analysis screen |
 | `engine/uci.py` | UCI protocol adapter for running the engine outside the GUI |
 | `engine/uci_client.py` | Spawns the engine as a (PyPy) subprocess and talks UCI to it |
-| `engine/bench.py` | Engine speed benchmark for comparing interpreters |
-| `engine/selfplay.py` | Self-play smoke test: two UCI engines play full games, asserts no illegal moves/crashes |
+| `engine/tools/bench.py` | Engine speed benchmark for comparing interpreters |
+| `engine/tools/selfplay.py` | Self-play smoke test: two UCI engines play full games, asserts no illegal moves/crashes |
 | `gui/` | Rendering: board graphics, animations, menus, panels |
 | `gui/review.py` | Review screen rendering: eval bar, graded move list, badges |
 | `pieces/` | Piece image assets (one subfolder per selectable piece set) |

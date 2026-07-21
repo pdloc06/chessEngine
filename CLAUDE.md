@@ -17,17 +17,17 @@ uv run pytest tests/test_move_finder.py -q                  # One file
 uv run pytest tests/test_ai_interface.py::test_perft_initial_position -q   # One test
 uv run mypy main.py config.py engine/ gui/ tests/           # Type check (config in mypy.ini)
 uv run --no-project python -m engine.uci                    # UCI engine REPL
-uv run --no-project python -m engine.bench                  # Engine benchmark (add -p pypy3.11 to compare)
+uv run --no-project python -m engine.tools.bench                  # Engine benchmark (add -p pypy3.11 to compare)
 
 # Measurement (see "Measuring engine changes"). All need PYTHONPATH=.
-PYTHONPATH=. uv run --no-project python -m engine.calibrate  # Strength vs UCI_Elo-limited Stockfish
-PYTHONPATH=. uv run --no-project python -m engine.sprt /tmp/baseline   # SPRT vs a baseline checkout
-PYTHONPATH=. uv run --no-project python -m engine.sf_review  # Grade the record directory with Stockfish
-PYTHONPATH=. uv run --no-project python -m engine.sf_watch --once      # Drain the analysis backlog
+PYTHONPATH=. uv run --no-project python -m engine.tools.calibrate  # Strength vs UCI_Elo-limited Stockfish
+PYTHONPATH=. uv run --no-project python -m engine.tools.sprt /tmp/baseline   # SPRT vs a baseline checkout
+PYTHONPATH=. uv run --no-project python -m engine.tools.sf_review  # Grade the record directory with Stockfish
+PYTHONPATH=. uv run --no-project python -m engine.tools.sf_watch --once      # Drain the analysis backlog
 ```
 
 External tools these need: `stockfish` (`brew install stockfish`) and
-`fastchess` (built from source into `~/.local/bin`; `engine/sprt.py` prints
+`fastchess` (built from source into `~/.local/bin`; `engine/tools/sprt.py` prints
 the recipe if it is missing).
 
 Run `pytest` and the full `mypy` command above before finishing any change — they are the project's quality gates.
@@ -82,13 +82,13 @@ question they were collected for. Both failures were measurement design, not
 engine quality.
 
 **Know the baseline first.** The engine measures **~2133 Elo** (2026-07-19,
-`engine/calibrate.py`, three Stockfish `UCI_Elo` levels agreeing within 47
+`engine/tools/calibrate.py`, three Stockfish `UCI_Elo` levels agreeing within 47
 points). Nothing gets tuned before a number like this exists, because without
 it there is no way to tell a real regression from a hostile sample. See the
 `engine-calibrated-strength` memory.
 
 **Score-neutral changes** (faster evaluation, cheaper move generation, provably
-equivalent pruning) — `uv run --no-project python -m engine.bench`:
+equivalent pruning) — `uv run --no-project python -m engine.tools.bench`:
 
 - **Node count is exactly deterministic, and it is the safety proof.** Identical
   node totals across the bench positions mean the search made every same
@@ -103,11 +103,11 @@ equivalent pruning) — `uv run --no-project python -m engine.bench`:
 
 **Behaviour changes** (pruning that can change a result, evaluation terms, move
 ordering, anything touching the clock) — **SPRT**, via
-`engine/sprt.py` (a `fastchess` wrapper):
+`engine/tools/sprt.py` (a `fastchess` wrapper):
 
 ```bash
 git worktree add /tmp/baseline master
-PYTHONPATH=. uv run --no-project python -m engine.sprt /tmp/baseline
+PYTHONPATH=. uv run --no-project python -m engine.tools.sprt /tmp/baseline
 ```
 
 - Fixed-size matches are the trap to avoid. 100 games resolve ±70 Elo and 400
@@ -125,7 +125,7 @@ PYTHONPATH=. uv run --no-project python -m engine.sprt /tmp/baseline
   Stockfish's UHO_Lichess_4852_v1 — unbalanced human openings cut the draw
   rate, which raises information per game.
 
-**Absolute strength** — `engine/calibrate.py` plays Stockfish pinned to a
+**Absolute strength** — `engine/tools/calibrate.py` plays Stockfish pinned to a
 requested Elo via `UCI_LimitStrength`, and brackets the level where we score
 50%. Use it after every milestone. It answers "how strong are we", which SPRT
 (a *relative* instrument) never can, and it is a foreign opponent, so unlike
@@ -145,7 +145,7 @@ The remaining absolute quantities are `MOVE_OVERHEAD` + `CLOCK_RESERVE`
 (1.15s), which are genuinely physical — network latency does not shrink with
 the clock. They eat 0.4% of a 300s clock but 11.5% of a 10s one, so **60s is
 the floor** below which the engine is measurably playing a different game.
-That is why `engine/sprt.py` defaults to `60+0`.
+That is why `engine/tools/sprt.py` defaults to `60+0`.
 
 ### Real games
 
@@ -156,7 +156,7 @@ kept pairing us with ~2930 bots, and we lost 42 of 43 — which is very close to
 the exact arithmetic of a 795-Elo gap, and says nothing whatever about the
 engine. A casual bot cannot self-correct its own matchmaking.
 
-`bot up` starts the bot **and** `engine/sf_watch.py`, which grades each game
+`bot up` starts the bot **and** `engine/tools/sf_watch.py`, which grades each game
 with Stockfish in the idle gap before the next one begins and appends a
 version-stamped record to `~/.local/share/pycheckmate/game_analysis.jsonl`.
 `bot down` waits for the current game *and* the current analysis to finish

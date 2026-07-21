@@ -34,8 +34,8 @@ easy to get subtly wrong:
 Usage: create a baseline to compare against, then run.
 
     git worktree add /tmp/baseline master
-    PYTHONPATH=. uv run --no-project python -m engine.sprt /tmp/baseline
-    ... -m engine.sprt /tmp/baseline --tc 10+0.1 --elo1 5
+    PYTHONPATH=. uv run --no-project python -m engine.tools.sprt /tmp/baseline
+    ... -m engine.tools.sprt /tmp/baseline --tc 10+0.1 --elo1 5
 
 Read the verdict literally. "H1 accepted" means the change is probably worth
 more than `elo1`; "H0 accepted" means it is probably not worth `elo1` --

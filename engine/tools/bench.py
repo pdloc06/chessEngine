@@ -3,8 +3,8 @@ Deterministic engine benchmark: perft throughput and fixed-depth searches.
 
 Run it under different interpreters to compare raw engine speed, e.g.:
 
-    uv run --no-project python -m engine.bench                # project CPython
-    uv run --no-project -p pypy3.11 python -m engine.bench    # PyPy (JIT-compiled)
+    uv run --no-project python -m engine.tools.bench                # project CPython
+    uv run --no-project -p pypy3.11 python -m engine.tools.bench    # PyPy (JIT-compiled)
 
 Perft exercises move generation + make/unmake only; the search benchmark
 exercises the full AI stack (ordering, evaluation, transposition table).
@@ -15,7 +15,7 @@ change is to play it against the old version and measure Elo — and for
 changes that alter *what the engine plays*, that is still the only honest
 test. But a self-play match is extraordinarily blunt: 100 games resolve
 nothing finer than about +/-70 Elo, and a night of them cannot separate a
-genuine 20-Elo gain from noise. Worse, `engine.selfplay`'s ply cap means a
+genuine 20-Elo gain from noise. Worse, `engine.tools.selfplay`'s ply cap means a
 faster engine often has nowhere to spend the speed at all (see the DEPTH
 comment there), so speed work can measure as zero however much it helps.
 
