@@ -647,44 +647,60 @@ here, and it costs one config line.
 
 **Tier 0 — prerequisites (no Elo, unlocks everything)**
 
-| Item | Effort |
-| --- | --- |
-| SPRT harness (`fastchess`, elo0=0 elo1=5) | half a day |
-| `info depth/score/nodes/nps/pv` in `uci.py` | an hour |
+| Item | Effort | Status |
+| --- | --- | --- |
+| SPRT harness (`fastchess`, elo0=0 elo1=5) | half a day | **done** |
+| `info depth/score/nodes/nps/pv` in `uci.py` | an hour | **done** |
 
 **Tier 1 — cheap and high-confidence**
 
-| # | Item | Est. Elo | Effort |
-| --- | --- | --- | --- |
-| 1 | Enable `online_egtb` | free, real | 1 config line |
-| 2 | Keep partial iteration results + raise the soft-stop gate (§7.1) | +30-50 | small diff |
+| # | Item | Est. Elo | Effort | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Enable `online_egtb` | free, real | 1 config line | **done** |
+| 2 | Keep partial iteration results + raise the soft-stop gate (§7.1) | +30-50 | small diff | **done** |
 
 **Tier 2 — real strength work**
 
-| # | Item | Est. Elo | Effort |
-| --- | --- | --- | --- |
-| 3 | Texel-tune the 34 constants + PSTs | +50-100 | 2-3 days |
-| 4 | King safety (attacker count/weight on king zone) | meaningful, targets §7.2 | 1-2 days |
-| 5 | Incremental eval accumulator (removes the 22% slice) | +0.3 ply | 1-2 days |
+| # | Item | Est. Elo | Effort | Status |
+| --- | --- | --- | --- | --- |
+| 3 | Texel-tune the 34 constants + PSTs | +50-100 | 2-3 days | **tool built 2026-07-22, blocked on data volume** |
+| 4 | King safety (attacker count/weight on king zone) | meaningful, targets §7.2 | 1-2 days | next candidate |
+| 5 | Incremental eval accumulator (removes the 22% slice) | +0.3 ply | 1-2 days | |
 
 **Tier 3 — depth**
 
-| # | Item | Est. Elo |
-| --- | --- | --- |
-| 6 | Staged movegen (no quiets when the TT move cuts off) | node-count win |
-| 7 | Singular extensions | ~36 |
-| 8 | Re-derive LMR/futility margins by tuning, not guessing | unknown, currently unmeasured |
-| 9 | Capture history + history gravity in ordering | fewer nodes |
+| # | Item | Est. Elo | Status |
+| --- | --- | --- | --- |
+| 6 | ~~Staged movegen~~ | ~~node-count win~~ | **measured neutral, reverted 2026-07-22** |
+| 7 | Singular extensions | ~36 | blocked: rests on a 19.7% TT hit rate, not yet understood |
+| 8 | Re-derive LMR/futility margins by tuning, not guessing | unknown, currently unmeasured | |
+| 9 | Capture history + history gravity in ordering | fewer nodes | |
 
 **Tier 4 — the wall**
 
-NNUE is where meaningful further gains live, and it is also where pure Python
-stops cooperating: inference needs fast vector math, which means numpy for the
-accumulator and a real risk that per-move overhead eats the evaluation gain.
-This is a project in itself, not a stage. Worth attempting only after Tiers 0-3
-are exhausted and re-calibrated.
+NNUE is where meaningful further gains live. This is a project in itself, not a
+stage; worth attempting only after Tiers 0-3 are exhausted and re-calibrated.
+
+> **Correction (2026-07-22).** This paragraph used to claim inference "needs
+> fast vector math, which means numpy for the accumulator". That is wrong, and
+> wrong in the expensive direction: numpy under PyPy goes through `cpyext` and
+> would be *slower* than plain lists, so the sentence argued against NNUE using
+> a cost that only appears if you take its own advice. Measured on this M2 with
+> d-house's shape (256-wide accumulator, one 512->1 quantized layer), the
+> accumulator update is **0.47 us in plain PyPy lists** — the cheapest part of
+> the whole thing. The real cost is the forward pass at 11.55 us, which takes a
+> node from ~10.2 us to ~18.7 us: **~1.8x slower, about 0.85 doublings**.
+> CPython is the genuine wall, at a ~12,260 nps ceiling, which is why the
+> in-process fallback and the GUI must keep the classical evaluation whatever
+> happens here.
 
 ### 7.6 Realistic target
+
+> **Note (2026-07-22).** The 2400-2600 figure was written before any tier had
+> been costed, and two of them have since been measured rather than estimated:
+> staged movegen came in at zero, and Texel tuning is blocked on having far
+> more games than this project has played. Treat the number as the original
+> ambition, not a forecast.
 
 Tiers 0-3 plausibly land **2400-2600**. Beyond that, a pure-Python engine is
 fighting arithmetic: ~1M nps under PyPy against Stockfish's 100M+, compensated

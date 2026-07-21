@@ -131,6 +131,14 @@ PYTHONPATH=. uv run --no-project python -m engine.tools.sprt /tmp/baseline
   sample cannot answer, which is exactly what stages F–J did. SPRT instead
   stops as soon as the evidence is decisive and declines to answer when the
   change is genuinely neutral.
+- **Deliberate exception, 2026-07-21/22.** The Phase 1 endgame work shipped
+  four behaviour changes as one bundle, to be judged by a single long run of
+  rated games rather than four SPRTs. The reason is cost — an SPRT is ~3.5
+  hours of the whole machine each, while the bot measures for free against
+  foreign opposition. The price is real and was accepted knowingly: a negative
+  result will not name a culprit, so the changes are one commit each, riskiest
+  last, and three of the four are verified by tests rather than by Elo. Do not
+  read this as the rule being relaxed generally.
 - **One change in flight at a time.** When five features land together and the
   total is zero, nothing has been learned about any of them — two could be +30
   and three −20. Stage J was reverted with the commit message "never measured

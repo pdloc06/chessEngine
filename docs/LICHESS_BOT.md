@@ -179,6 +179,19 @@ shape:
   control drawn from `challenge_initial_time` / `challenge_increment` —
   currently 300 s / 600 s with 0 s / 2 s increment. `accept_bot: true` lets bots
   challenge back.
+
+  **`challenge_timeout` is 2, lowered from 5 on 2026-07-22.** The old value
+  left the machine idle for most of the gap between games: measured across 101
+  games, the median game ran 13.2 min and the median idle gap 6.2 min, a 55%
+  duty cycle. The floor is set by `sf_watch`, which grades each finished game
+  with Stockfish in that gap — game-end to analysis-done measured 0.42-1.42
+  min, median 0.69, and `sf_watch` only checks `bot_is_playing()` *before* it
+  picks up a game, so an analysis already in flight is not interrupted. At
+  `challenge_timeout: 1` the next challenge would fire while Stockfish still
+  held the CPU in 2% of games, putting a full-strength analysis inside a live
+  rated game and corrupting the very records the run exists to produce. At 2
+  that is zero, with 0.58 min of headroom. lichess-bot clamps this to a minimum
+  of 1 anyway (`lib/config.py`), so lower would need patching the bridge.
 - `ponder: false`; `uci_options` commented out (the adapter declares none).
 
 ## Testing pipeline
