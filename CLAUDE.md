@@ -25,6 +25,7 @@ PYTHONPATH=. uv run --no-project python -m engine.tools.sprt /tmp/baseline   # S
 PYTHONPATH=. uv run --no-project python -m engine.tools.sf_review  # Grade the record directory with Stockfish
 PYTHONPATH=. uv run --no-project python -m engine.tools.sf_watch --once      # Drain the analysis backlog
 PYTHONPATH=. uv run --no-project -p pypy3.11 python -m engine.tools.tune     # Texel-fit the eval constants
+PYTHONPATH=. uv run --no-project python -m engine.tools.clock_replay   # Where a clock constant sends time
 ```
 
 External tools these need: `stockfish` (`brew install stockfish`) and
