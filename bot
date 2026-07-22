@@ -26,6 +26,21 @@ WATCHPID="$BOT_DIR/sf_watch.pid"
 WATCHLOG="$HOME/.local/share/pycheckmate/sf_watch.log"
 MATCH="$BOT_DIR/.venv"   # every bot process (main + children) runs this venv's python
 
+# Pin the label each game is recorded under, e.g. BOT_ENGINE_VERSION=fd9ebc0.
+#
+# sf_watch normally stamps records with the current git rev, and starting a new
+# rev starts a new measurement set. That is right when the engine changed, and
+# wrong when it did not: committing docs or anything under engine/tools/ during
+# a run moves HEAD without altering a single line the engine executes, so a
+# restart would split one set of games into two labels that cannot be averaged
+# ("never average across engine_version"). Pinning keeps them one set.
+#
+# Only pin when `git diff <pinned-rev> HEAD -- engine/` shows nothing outside
+# engine/tools/. If the engine itself changed, the new label is correct and
+# this must be unset -- a stale pin would silently file new games under the old
+# engine, which is the exact error the label exists to prevent.
+ENGINE_VERSION="${BOT_ENGINE_VERSION:-}"
+
 alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 # The watcher is launched through `uv run`, which forks, so the pid the
 # shell sees is a wrapper rather than the python process. Matching on the
@@ -85,7 +100,9 @@ up)
     # the build, so one file can never average two engines.
     mkdir -p "$(dirname "$WATCHLOG")"
     ( cd "$ENGINE_DIR" && PYTHONPATH=. nohup uv run --no-project python -u \
-        -m engine.tools.sf_watch --since auto >> "$WATCHLOG" 2>&1 & )
+        -m engine.tools.sf_watch --since auto \
+        ${ENGINE_VERSION:+--version "$ENGINE_VERSION"} >> "$WATCHLOG" 2>&1 & )
+    [ -n "$ENGINE_VERSION" ] && echo "recording games as engine version $ENGINE_VERSION"
     sleep 3
     echo "started (pid $(cat "$PIDFILE")), keeping Mac awake"
     if watch_alive; then
@@ -112,8 +129,11 @@ down)
             sleep 5
             waited=$((waited + 5))
         done
-        [ "$waited" -gt 0 ] && printf "\rgame finished after %dm%02ds%-30s\n" \
-            $((waited / 60)) $((waited % 60)) ""
+        # \033[K clears from the cursor to end of line. Padding with spaces is
+        # what this used to do, and it left the tail of the longer progress
+        # line on screen -- the countdown is 75 columns and the pad covered 30.
+        [ "$waited" -gt 0 ] && printf "\rgame finished after %dm%02ds\033[K\n" \
+            $((waited / 60)) $((waited % 60))
     fi
 
     # Stop the bot first so no new game can start while the analysis drains.
@@ -140,8 +160,8 @@ down)
             sleep 10
             waited=$((waited + 10))
         done
-        [ "$waited" -gt 0 ] && printf "\ranalysis complete after %dm%02ds%-30s\n" \
-            $((waited / 60)) $((waited % 60)) ""
+        [ "$waited" -gt 0 ] && printf "\ranalysis complete after %dm%02ds\033[K\n" \
+            $((waited / 60)) $((waited % 60))
     fi
     stop_watch
 
