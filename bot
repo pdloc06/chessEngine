@@ -39,7 +39,16 @@ MATCH="$BOT_DIR/.venv"   # every bot process (main + children) runs this venv's 
 # engine/tools/. If the engine itself changed, the new label is correct and
 # this must be unset -- a stale pin would silently file new games under the old
 # engine, which is the exact error the label exists to prevent.
+#
+# `bot up` writes the pin to VERSIONFILE and `bot down` reads it back, because
+# BOT_ENGINE_VERSION is a per-invocation environment variable and is long gone
+# by the time you stop the bot days later. Without that the drain query falls
+# back to the newest cut rather than the pinned one, so any game finishing
+# between the two timestamps is invisible to the pending count -- `bot down`
+# then reports nothing to wait for and kills the watcher mid-analysis, losing
+# that game's record entirely.
 ENGINE_VERSION="${BOT_ENGINE_VERSION:-}"
+VERSIONFILE="$BOT_DIR/engine_version"
 
 alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 # The watcher is launched through `uv run`, which forks, so the pid the
@@ -99,6 +108,11 @@ up)
     # while a new build still begins a clean set. Each record is stamped with
     # the build, so one file can never average two engines.
     mkdir -p "$(dirname "$WATCHLOG")"
+    if [ -n "$ENGINE_VERSION" ]; then
+        echo "$ENGINE_VERSION" > "$VERSIONFILE"
+    else
+        rm -f "$VERSIONFILE"
+    fi
     ( cd "$ENGINE_DIR" && PYTHONPATH=. nohup uv run --no-project python -u \
         -m engine.tools.sf_watch --since auto \
         ${ENGINE_VERSION:+--version "$ENGINE_VERSION"} >> "$WATCHLOG" 2>&1 & )
@@ -144,10 +158,14 @@ down)
     fi
 
     if [ "$force" -eq 0 ] && watch_alive; then
+        # Same pin the watcher was started with, so both halves resolve the
+        # same cut. See the VERSIONFILE note at the top.
+        [ -f "$VERSIONFILE" ] && ENGINE_VERSION="$(cat "$VERSIONFILE")"
         waited=0
         while :; do
             left=$(cd "$ENGINE_DIR" && PYTHONPATH=. uv run --no-project python \
-                     -m engine.tools.sf_watch --pending --since auto 2>/dev/null | tail -1)
+                     -m engine.tools.sf_watch --pending --since auto \
+                     ${ENGINE_VERSION:+--version "$ENGINE_VERSION"} 2>/dev/null | tail -1)
             case "$left" in ''|*[!0-9]*) left=0 ;; esac
             # Wait on the pending count alone. Checking for a live stockfish
             # process looks safer but hangs forever: sf_watch keeps one client

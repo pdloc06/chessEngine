@@ -113,6 +113,26 @@ down until you say otherwise, which is what keeps the rate limiter happy.
 Stopping is the whole cleanup — `caffeinate` dies with the bot and the Mac
 resumes normal sleep.
 
+### Pinning the version a run is recorded under
+
+`sf_watch` normally stamps each game with the current git rev, and a new rev
+starts a new measurement set — which is right when the engine changed and wrong
+when it did not. Committing docs, or anything under `engine/tools/`, moves HEAD
+without altering a line the engine executes, so restarting the bot after one
+would split a single run into two labels that cannot be averaged (see
+"never average across `engine_version`" in `CLAUDE.md`).
+
+```
+BOT_ENGINE_VERSION=fd9ebc0 bot up
+```
+
+`bot up` writes the pin to `engine_version` beside the pidfile so `bot down`
+resolves the same cut days later; unset, it removes the file and the stamp goes
+back to HEAD. Only pin when `git diff <pinned-rev> HEAD -- engine/` shows
+nothing outside `engine/tools/` — if the engine itself changed, the new label is
+the correct one and a stale pin would file new games under the old engine, which
+is the exact error the label exists to prevent.
+
 The critical part is the **sweep** in `bot down` (and defensively in `bot up`):
 it doesn't just kill the main pid, it `pkill`s everything running the clone's
 `.venv` python. The next section is why.
