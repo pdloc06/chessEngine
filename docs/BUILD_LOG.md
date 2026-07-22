@@ -722,6 +722,55 @@ predicts game outcomes better, not that the engine plays better, and the two
 come apart when a term also feeds search behavior. Applying these needs an
 SPRT, and the machine cannot run one while the bot plays.
 
+**Correction, same day: all four seeds read the same biased 82% of the file.**
+A cold review of the new loader found that `blocks[::stride][:wanted]` does not
+thin a file out — integer division always over-strides, so the truncation
+discards exactly the tail the stride existed to reach. At the 200k default the
+last 17.6% of `quiet-labeled.epd` was unreachable, and `--seed` could not
+rescue it because the seed reshuffles blocks *after* selection. So the four
+seeds above are four splits of one biased sample, which weakens the
+spread-collapse argument they were run to make. The values are parked
+unapplied on branch `texel-tuned`; the fit is being re-run on the fixed
+sampler before anything is measured. Worth stating plainly: the check that
+would have caught this is the one the test file did have — it asserted the
+right property with the one input size that cannot expose the bug (6 blocks,
+2 wanted, where the stride happens to be exact).
+
+### The SPRT harness was starving itself (2026-07-22)
+
+The first attempt to SPRT anything failed in a way that looked like an engine
+bug and was not. Every game ended with **both** engines overrunning the 60s
+clock — by 131s to 212s — and forfeiting, and the overrun grew with the length
+of the game. fastchess's trace ended on "Engine base is thinking" and never
+came back.
+
+Ruled out one at a time, all negative: the tuned values (the untouched
+baseline hangs too), the interpreter (PyPy resolves correctly), time
+management (clocks stepped 60s down to 50ms, every reply under 0.94s), and the
+opening book (12 sampled positions, all ~1.1s).
+
+The cause is memory. Each engine holds a transposition table of up to
+`uci.TT_MAX_ENTRIES` = 2,000,000 entries plus `eval._EVAL_CACHE` at 1,000,000,
+and sampling RSS through a real game shows **460-625 MB per process partway
+through 114 plies, still climbing**. Concurrency N runs 2N engines, so the
+default of 4 put eight of them on this machine's 8 GB. It swapped; every
+search slowed by orders of magnitude; the clock is simply what noticed first.
+And because the caches grow as a game goes on, so did the overrun — the one
+symptom that had looked most like a search bug is the plainest evidence for
+memory.
+
+Verified at concurrency 1: two complete games, 45 moves each, longest search
+1.26s, both terminated normally with no forfeit. `sprt.py` now defaults to 2
+(four processes, ~2.5 GB), which also sits under the CPU limit already
+recorded here.
+
+The transferable lesson is that **the instrument's own resource budget is part
+of the measurement design.** This project has now lost time twice to a
+measurement harness that quietly changed what it was measuring — first the
+clock-fidelity trap, where scaled test clocks moved the hoarding tiers to a
+different point in the game, and now this. Both presented as engine defects.
+Neither was.
+
 ---
 
 ## Performance Benchmarks
