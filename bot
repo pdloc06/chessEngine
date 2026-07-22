@@ -17,6 +17,7 @@ set -u
 BOT_DIR="$HOME/PycharmProjects/lichess-bot"   # the lichess-bot clone: run.sh, .venv, .token
 PIDFILE="$BOT_DIR/bot.pid"
 LOG="$BOT_DIR/bot.log"
+LOG_MAX_BYTES=52428800   # 50 MB; see the rotation note in `bot up`
 # The Stockfish analysis watcher runs alongside the bot: it grades each game
 # in the idle gap after it finishes, so a multi-day unattended run arrives
 # with its analysis already done. It lives in the PyCheckmate repo's venv, not
@@ -98,6 +99,16 @@ up)
         sleep 60
     fi
     cd "$BOT_DIR" || exit 1
+    # Rotate before starting, keeping one generation. run.sh passes -v, so
+    # lichess-bot logs at DEBUG and echoes every UCI `info` line the engine
+    # emits -- one per deepening iteration, per move, per game. That is worth
+    # having (those lines exist because two bugs stayed invisible for weeks
+    # without them), but `bot up` appends and nothing else ever truncates, so
+    # the log had reached 129 MB / 992k lines before anyone looked.
+    if [ -f "$LOG" ] && [ "$(stat -f%z "$LOG")" -gt "$LOG_MAX_BYTES" ]; then
+        mv -f "$LOG" "$LOG.1"
+        echo "rotated $(basename "$LOG") -> $(basename "$LOG").1"
+    fi
     # run.sh loads the token from .token and execs the venv python;
     # caffeinate -s keeps the Mac awake (on AC power) while the bot runs.
     nohup caffeinate -s "$BOT_DIR/run.sh" >> "$LOG" 2>&1 &

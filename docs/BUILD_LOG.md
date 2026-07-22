@@ -730,11 +730,44 @@ last 17.6% of `quiet-labeled.epd` was unreachable, and `--seed` could not
 rescue it because the seed reshuffles blocks *after* selection. So the four
 seeds above are four splits of one biased sample, which weakens the
 spread-collapse argument they were run to make. The values are parked
-unapplied on branch `texel-tuned`; the fit is being re-run on the fixed
-sampler before anything is measured. Worth stating plainly: the check that
-would have caught this is the one the test file did have — it asserted the
-right property with the one input size that cannot expose the bug (6 blocks,
-2 wanted, where the stride happens to be exact).
+unapplied on branch `texel-tuned`; the fit was re-run on the fixed sampler
+before anything was measured. Worth stating plainly: the check that would have
+caught this is the one the test file did have — it asserted the right property
+with the one input size that cannot expose the bug (6 blocks, 2 wanted, where
+the stride happens to be exact).
+
+### The re-fit: the bias did not change the answer (2026-07-22)
+
+Four seeds again, this time reading the whole file.
+
+| | starting-error spread | answer spread |
+| --- | --- | --- |
+| original fit, 3.2k positions from our PGNs | 2x | **17.8 points** |
+| EPD fit, biased to 82% of the file | 2.4% | 0.7 points |
+| **EPD fit, whole file** | **1.0%** | **0.38 points** |
+
+Held-out error fell 2.73%, 2.57%, 2.92%, 2.95%. Seventeen of the 24 moved
+parameters have three or more seeds agreeing *exactly*, and `PIECE_VALUES`
+again did not move in any seed — which is what keeps this change out of the
+search, since static exchange evaluation shares those values.
+
+**The sampling bias turned out not to matter.** The values land essentially on
+top of the biased fit: `ROOK_ON_SEVENTH_BONUS` 20 -> 8 in all four seeds, the
+same mobility redistribution toward sliding pieces, the same passed-pawn shape.
+The file was homogeneous enough that the missing 17.6% carried no distinct
+signal.
+
+That is worth being careful about rather than relieved by. The fix was still
+necessary, because *without it there was no way to know* — "the tail probably
+looks like the rest of the file" is an assumption about someone else's dataset,
+and the point of the exercise was to stop assuming things about the input. A
+bug that would have mattered and a bug that happened not to are
+indistinguishable until you remove it. What the agreement does buy is
+confidence in the earlier run's conclusion, which was drawn before anyone knew
+the sampler was broken.
+
+Applied as `94efc2d` on branch `texel-tuned`, unmerged: held-out error is not
+Elo. The SPRT decides.
 
 ### The SPRT harness was starving itself (2026-07-22)
 
@@ -1011,5 +1044,6 @@ a public Lichess rating to match it.
 
 ---
 
-_Last updated: 2026-07-20 — engine calibrated at ~2133 Elo; redeployed rated
-with automated per-game Stockfish analysis running alongside the bot._
+_Last updated: 2026-07-22 — the evaluation's constants fitted on 725k public
+labeled positions and parked unmerged on `texel-tuned`, pending the SPRT that
+the concurrency fix above finally made runnable._

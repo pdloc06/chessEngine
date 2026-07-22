@@ -113,6 +113,23 @@ down until you say otherwise, which is what keeps the rate limiter happy.
 Stopping is the whole cleanup — `caffeinate` dies with the bot and the Mac
 resumes normal sleep.
 
+### The log rotates, because it grows faster than you would guess
+
+`run.sh` passes `-v`, which puts lichess-bot at DEBUG level. At that level it
+echoes **every UCI `info` line the engine emits** — one per deepening
+iteration, per move, per game — plus the full move list of every `position`
+command, all wrapped in ANSI colour codes. That is genuinely worth having;
+those `info` lines exist because two bugs stayed invisible for weeks without
+them (see `docs/BUILD_LOG.md`, "you cannot debug what you cannot see"). But
+`bot up` appends and nothing else truncates, so it had reached **129 MB across
+992,245 lines** before anyone thought to look.
+
+`bot up` now rotates it: over 50 MB, `bot.log` moves to `bot.log.1` before the
+bot starts, keeping exactly one generation. Two files, bounded total, and the
+last run is still there to read when something goes wrong. Turning off `-v`
+would be the other fix and is the wrong one — it trades the ability to debug a
+live bot for disk space that costs nothing.
+
 ### Pinning the version a run is recorded under
 
 `sf_watch` normally stamps each game with the current git rev, and a new rev
