@@ -264,8 +264,14 @@ def load_epd(path: str, limit: int | None = DEFAULT_EPD_LIMIT,
     blocks = [lines[i:i + block_size]
               for i in range(0, len(lines), block_size)]
     if limit is not None and limit < len(lines):
+        # Index the blocks we want directly rather than striding and then
+        # truncating. `blocks[::step][:wanted]` looks equivalent but is not:
+        # integer division always over-strides, so the `[:wanted]` cut throws
+        # away the tail the stride was there to reach. At the 200k default that
+        # left the last 17.6% of the file unreachable at *every* seed, because
+        # --seed only reshuffles blocks that were already selected.
         wanted = max(1, limit // block_size)
-        blocks = blocks[::max(1, len(blocks) // wanted)][:wanted]
+        blocks = [blocks[i * len(blocks) // wanted] for i in range(wanted)]
 
     groups: list[Group] = []
     for block in blocks:
@@ -605,6 +611,14 @@ def main() -> None:
 
     train = flatten(shuffled[:cut])
     valid = flatten(shuffled[cut:])
+    # A --limit small enough to yield one group puts every position on one
+    # side of the cut, and the empty side divides by zero inside
+    # `mean_squared_error`. That is exactly what a smoke run asks for, so say
+    # what to change instead of raising ZeroDivisionError from three frames in.
+    if not train[0] or not valid[0]:
+        print(f'only {len(groups)} group(s) — too few to split; raise --limit',
+              file=sys.stderr)
+        raise SystemExit(1)
     print(f'{len(groups)} groups -> {len(train[0]):,} training positions '
           f'from {cut} groups, {len(valid[0]):,} validation positions '
           f'from {len(shuffled) - cut} groups')

@@ -94,3 +94,9 @@ def test_load_epd_samples_across_the_whole_file(tmp_path):
     assert sum(len(positions) for positions, _ in groups) == EPD_BLOCK_SIZE * 2
     # Blocks 0 and 3 of 6, so the second sample comes from the file's back half.
     assert [results[0] for _, results in groups] == [1.0, 1.0]
+
+    # Asking for more than half the blocks is where truncation used to hide:
+    # the stride collapsed to 1 and the sampler became `lines[:limit]`, so the
+    # tail stayed unreachable no matter which seed ran. Blocks 0, 1, 3, 4.
+    groups = load_epd(_write_epd(tmp_path, lines), limit=EPD_BLOCK_SIZE * 4)
+    assert [results[0] for _, results in groups] == [1.0, 0.0, 1.0, 0.0]
