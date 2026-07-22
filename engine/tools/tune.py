@@ -20,54 +20,64 @@ construction. K sets how sharply centipawns convert to probability and is
 fitted once, before any weight is touched, because every later comparison
 depends on it.
 
-## The honest limitation, stated up front
+## Where the positions come from, and a mistake worth remembering
 
-This project has **147 games, about 8,700 positions**. Texel tuning normally
-runs on hundreds of thousands. Fitting ~30 parameters on a set this small will
-happily learn the noise in our own games, and the resulting numbers would look
-like an improvement while being worth nothing — which is exactly the failure
-mode `CLAUDE.md` was written about.
+Texel tuning wants hundreds of thousands of positions. Fitting ~30 parameters
+on a small set will happily learn the noise in it, and the resulting numbers
+look like an improvement while being worth nothing — exactly the failure mode
+`CLAUDE.md` was written about.
 
 Two things are therefore built in rather than optional:
 
-- **The split is by game, not by position.** Positions from one game are
+- **The split is by group, not by position.** Positions from one game are
   strongly correlated (same pawn structure, same material, same result), so a
   position-level split leaks the answer across it and makes validation error
-  meaninglessly optimistic.
-- **A parameter change is only kept if it improves error on games the fit has
+  meaninglessly optimistic. A group is one game for PGN input, and one
+  contiguous block of the file for EPD input, where neighbouring lines come
+  from the same game.
+- **A parameter change is only kept if it improves error on groups the fit has
   never seen.** Training error always falls; that is what fitting does. Only
   the held-out number is evidence.
 
+This tool was first written to read only the bot's own PGNs, and on 127 games
+-> **3,231 quiet positions** (about 111 per parameter) it produced pure noise:
+run to convergence, held-out error *rose* to 0.1401, worse than not tuning at
+all, and the values were chess nonsense — bishop below knight, outposts
+penalized, every passed-pawn bonus negative. Repeating across four splits gave
+-3.1%, -6.2%, +0.0% and -17.8%.
+
+The conclusion recorded here at the time was "re-run once the bot has played
+several hundred more games". **That was wrong**, and it is the more useful
+lesson of the two. Because the loader read PGNs, "we need more data" silently
+became "we need to play more games" — so the fix looked like eight days of
+waiting. Public labeled sets have existed for years, and a full 600-game run
+(~15k positions) would still have been ~50x short of what the method wants.
+Texel's own paper used 8.8M positions from 64,000 games.
+
+**When a tool seems to need data you do not have, check what its loader can
+read before you go and collect any.**
+
+The default input is now `quiet-labeled.epd` — 725,000 already-quiet positions
+labeled with game results, ~39 MB, no relation to our own games. It is not
+committed; fetch it once with:
+
+    curl -Lo ~/.local/share/pycheckmate/quiet-labeled.epd \\
+      https://raw.githubusercontent.com/KierenP/ChessTrainingSets/master/quiet-labeled.epd
+
 Even so, treat the output as a hypothesis to be measured by real games, not as
-a result. Run it, look at whether validation error moves at all, and be
-willing to conclude the data cannot support the fit.
-
-## What it said when it was first run (2026-07-22)
-
-It cannot, yet. On 127 usable games -> **3,231 quiet positions**, roughly 111
-positions per parameter where the method wants thousands:
-
-- Run to convergence, training error fell 33% (0.0871 -> 0.0587) while
-  held-out error *rose* past round 3 and finished at 0.1401, **worse than not
-  tuning at all**. Textbook overfitting, caught only because the split exists.
-- The converged values were chess nonsense: bishop below knight, knight
-  outposts penalized, isolated pawns rewarded, every passed-pawn bonus
-  negative.
-- With early stopping the held-out error did improve 5.9%. But repeating the
-  whole fit across four different game splits gave -3.1%, -6.2%, **+0.0%** and
-  **-17.8%** — and the *starting* held-out error varied 2x across those same
-  splits. Which 32 games land in validation dominates the answer, so a single
-  number from a single split is not evidence.
-
-**The tuned values were therefore not applied.** The blocker is data volume,
-not method: the tool is correct and the pipeline works end to end. Re-run it
-once the bot has played several hundred more games; a rough guide is that the
-split-to-split spread above should collapse before any output is believed.
+a result: applying these values is a behavior change, and `PIECE_VALUES` is
+shared with the search's static exchange evaluation, so it moves move ordering
+as well as scoring. That needs an SPRT, not a held-out error number.
 
 Usage
 -----
-    PYTHONPATH=. uv run --no-project python -m engine.tools.tune
+    PYTHONPATH=. uv run --no-project -p pypy3.11 python -m engine.tools.tune
     PYTHONPATH=. uv run --no-project python -m engine.tools.tune --games-dir DIR
+
+PyPy is worth the flag here: `evaluate()` is 2.25 us there against 20.1 us on
+CPython, and this loop does nothing else. The fit is also memory-bound — a
+`GameState` costs ~6.6 KB, so the full 725k set would need ~4.6 GB and the
+default sample of 200,000 keeps it near 1.3 GB.
 """
 import argparse
 import glob
@@ -87,6 +97,22 @@ from engine.movegen import generate_legal
 DEFAULT_GAMES_DIR = os.path.expanduser(
     '~/PycharmProjects/lichess-bot/game_records')
 
+# The public labeled set, kept beside the other generated data rather than in
+# the repo: it is 39 MB of someone else's positions.
+DEFAULT_EPD = os.path.expanduser(
+    '~/.local/share/pycheckmate/quiet-labeled.epd')
+
+# How many EPD lines make one group for the train/validation split. Neighbouring
+# lines in these files come from the same game, so splitting whole blocks keeps
+# a game's correlated positions on one side of the cut. Only the two lines at a
+# block's edges can straddle a game, which at this size is noise.
+EPD_BLOCK_SIZE = 512
+
+# Positions sampled by default. The cap is memory, not time: ~6.6 KB per
+# GameState puts the full 725k file at ~4.6 GB, while 200,000 costs ~1.3 GB and
+# still gives ~6,450 positions per parameter.
+DEFAULT_EPD_LIMIT = 200_000
+
 # Positions from the opening book teach nothing about evaluation — the moves
 # were not ours and the position is still balanced by construction.
 SKIP_OPENING_PLIES = 16
@@ -98,6 +124,12 @@ VALIDATION_FRACTION = 0.25
 SPLIT_SEED = 20260722
 
 RESULT_SCORE = {'1-0': 1.0, '0-1': 0.0, '1/2-1/2': 0.5}
+
+# One unit of the train/validation split: positions that belong together, and
+# the result each one is labeled with. A PGN game shares a single result across
+# all its positions; an EPD block carries one per line. Keeping the results per
+# position is what lets both loaders feed the same splitter.
+Group = tuple[list[GameState], list[float]]
 
 
 def sigmoid(score: float, k: float) -> float:
@@ -120,8 +152,7 @@ def sigmoid(score: float, k: float) -> float:
     return 1.0 / (1.0 + math.pow(10.0, -k * score / 400.0))
 
 
-def load_positions(games_dir: str, limit: int | None = None
-                   ) -> list[tuple[list[GameState], float]]:
+def load_positions(games_dir: str, limit: int | None = None) -> list[Group]:
     """
     Replay every PGN in a directory into positions labeled by game result.
 
@@ -141,11 +172,11 @@ def load_positions(games_dir: str, limit: int | None = None
 
     Returns
     -------
-    list of (list of GameState, float)
-        One entry per game: its quiet positions, and its result as a score
-        from White's perspective.
+    list of Group
+        One entry per game: its quiet positions, and the game's result repeated
+        once per position, as a score from White's perspective.
     """
-    games: list[tuple[list[GameState], float]] = []
+    games: list[Group] = []
     paths = sorted(glob.glob(os.path.join(games_dir, '*.pgn')))
     if limit is not None:
         paths = paths[:limit]
@@ -184,8 +215,70 @@ def load_positions(games_dir: str, limit: int | None = None
                 continue          # a capture is available: not quiet
             positions.append(GameState.from_fen(board.to_fen()))
         if positions:
-            games.append((positions, RESULT_SCORE[result]))
+            games.append((positions, [RESULT_SCORE[result]] * len(positions)))
     return games
+
+
+def load_epd(path: str, limit: int | None = DEFAULT_EPD_LIMIT,
+             block_size: int = EPD_BLOCK_SIZE) -> list[Group]:
+    """
+    Read a labeled EPD file into position groups.
+
+    The expected line is a FEN followed by the game result in EPD's `c9` field:
+
+        rn2kb1r/ppp1pp1p/... b KQkq - c9 "0-1";
+
+    These files carry only the first four FEN fields, which `GameState.from_fen`
+    already accepts — it defaults the half-move clock, and nothing here depends
+    on it because `evaluate()` is a pure function of the position.
+
+    Sampling takes every Nth *block* rather than every Nth line, and so keeps
+    two properties at once: blocks stay contiguous, so a game's positions are
+    not split across the train/validation cut, and the blocks taken are spread
+    across the whole file instead of being a prefix of it.
+
+    Parameters
+    ----------
+    path : str
+        Path to the `.epd` file.
+    limit : int or None, optional
+        Approximate cap on positions returned. None reads the whole file, which
+        for a 725k-line set needs roughly 4.6 GB.
+    block_size : int, optional
+        Lines per group.
+
+    Returns
+    -------
+    list of Group
+        Groups of positions with their per-position results.
+    """
+    with open(path, encoding='utf-8') as handle:
+        lines = [line for line in handle if ' c9 ' in line]
+
+    blocks = [lines[i:i + block_size]
+              for i in range(0, len(lines), block_size)]
+    if limit is not None and limit < len(lines):
+        wanted = max(1, limit // block_size)
+        blocks = blocks[::max(1, len(blocks) // wanted)][:wanted]
+
+    groups: list[Group] = []
+    for block in blocks:
+        positions: list[GameState] = []
+        results: list[float] = []
+        for line in block:
+            fen, _, tail = line.partition(' c9 ')
+            result = tail.strip().rstrip(';').strip('"')
+            if result not in RESULT_SCORE:
+                continue
+            try:
+                position = GameState.from_fen(fen)
+            except (ValueError, KeyError, IndexError):
+                continue          # a malformed line is skipped, not fatal
+            positions.append(position)
+            results.append(RESULT_SCORE[result])
+        if positions:
+            groups.append((positions, results))
+    return groups
 
 
 def mean_squared_error(positions: list[GameState], results: list[float],
@@ -460,38 +553,57 @@ def main() -> None:
     None
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--games-dir', default=DEFAULT_GAMES_DIR)
+    parser.add_argument('--epd', default=DEFAULT_EPD,
+                        help='labeled EPD file to fit on (the default input)')
+    parser.add_argument('--games-dir', nargs='?', const=DEFAULT_GAMES_DIR,
+                        help='fit on our own PGNs instead of --epd; there are '
+                             'far too few of them to support a fit, so this is '
+                             'kept for comparison only')
     parser.add_argument('--limit', type=int, default=None,
-                        help='only read this many PGNs (smoke runs)')
+                        help='cap the input: PGN games, or EPD positions '
+                             f'(default {DEFAULT_EPD_LIMIT:,} for EPD)')
     parser.add_argument('--rounds', type=int, default=12)
     parser.add_argument('--seed', type=int, default=SPLIT_SEED)
     args = parser.parse_args()
 
-    print(f'reading games from {args.games_dir}')
-    games = load_positions(args.games_dir, args.limit)
-    if not games:
-        print('no usable games found', file=sys.stderr)
+    if args.games_dir:
+        print(f'reading games from {args.games_dir}')
+        groups = load_positions(args.games_dir, args.limit)
+    else:
+        if not os.path.exists(args.epd):
+            print(f'no EPD file at {args.epd}\n'
+                  'fetch it once with:\n'
+                  '  curl -Lo ' + args.epd + ' \\\n'
+                  '    https://raw.githubusercontent.com/KierenP/'
+                  'ChessTrainingSets/master/quiet-labeled.epd',
+                  file=sys.stderr)
+            raise SystemExit(1)
+        print(f'reading positions from {args.epd}')
+        groups = load_epd(args.epd, args.limit or DEFAULT_EPD_LIMIT)
+    if not groups:
+        print('no usable positions found', file=sys.stderr)
         raise SystemExit(1)
 
     rng = random.Random(args.seed)
-    shuffled = games[:]
+    shuffled = groups[:]
     rng.shuffle(shuffled)
     cut = int(len(shuffled) * (1.0 - VALIDATION_FRACTION))
 
-    def flatten(subset: list[tuple[list[GameState], float]]
-                ) -> tuple[list[GameState], list[float]]:
+    def flatten(subset: list[Group]) -> tuple[list[GameState], list[float]]:
         positions: list[GameState] = []
         results: list[float] = []
-        for game_positions, result in subset:
-            positions.extend(game_positions)
-            results.extend([result] * len(game_positions))
+        for group_positions, group_results in subset:
+            positions.extend(group_positions)
+            results.extend(group_results)
         return positions, results
 
     train = flatten(shuffled[:cut])
     valid = flatten(shuffled[cut:])
-    print(f'{len(games)} games -> {len(train[0]):,} training positions '
-          f'from {cut} games, {len(valid[0]):,} validation positions '
-          f'from {len(shuffled) - cut} games')
+    print(f'{len(groups)} groups -> {len(train[0]):,} training positions '
+          f'from {cut} groups, {len(valid[0]):,} validation positions '
+          f'from {len(shuffled) - cut} groups')
+    print(f'{len(train[0]) / max(1, len(parameters())):,.0f} training '
+          f'positions per parameter')
 
     k = fit_k(*train)
     print(f'fitted K = {k:.2f}')

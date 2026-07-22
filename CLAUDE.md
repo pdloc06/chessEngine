@@ -24,11 +24,14 @@ PYTHONPATH=. uv run --no-project python -m engine.tools.calibrate  # Strength vs
 PYTHONPATH=. uv run --no-project python -m engine.tools.sprt /tmp/baseline   # SPRT vs a baseline checkout
 PYTHONPATH=. uv run --no-project python -m engine.tools.sf_review  # Grade the record directory with Stockfish
 PYTHONPATH=. uv run --no-project python -m engine.tools.sf_watch --once      # Drain the analysis backlog
+PYTHONPATH=. uv run --no-project -p pypy3.11 python -m engine.tools.tune     # Texel-fit the eval constants
 ```
 
 External tools these need: `stockfish` (`brew install stockfish`) and
 `fastchess` (built from source into `~/.local/bin`; `engine/tools/sprt.py` prints
-the recipe if it is missing).
+the recipe if it is missing). `tune.py` needs `quiet-labeled.epd` in
+`~/.local/share/pycheckmate/` — 39 MB of public labeled positions, deliberately
+not committed; the tool prints the `curl` line if it is missing.
 
 Run `pytest` and the full `mypy` command above before finishing any change — they are the project's quality gates.
 

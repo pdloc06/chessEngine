@@ -616,6 +616,56 @@ number existed, so it cost one afternoon instead of a night of matches. The
 tool is kept and re-runs cheaply; the gate for believing it is that the
 split-to-split spread above collapses.
 
+### The dataset did exist — the loader was the limit (2026-07-22)
+
+The entry above concluded "re-run it once the bot has played several hundred
+more games", and the plan duly carried that as one of three reasons the
+validation run needed ~600 games. Lucas asked the obvious question — *why are
+we not using an existing dataset?* — and the answer was that nobody had
+checked.
+
+`load_positions()` reads PGNs out of the bot's `game_records`. Nothing else
+about the method requires that; it was simply the input format the tool was
+born with, and it quietly turned **"we need more data" into "we need to play
+more games"**. `quiet-labeled.epd` is 725,000 already-quiet labeled positions
+in a 39 MB download that has been public for years. Texel's own paper used 8.8M
+positions from 64,000 games.
+
+The arithmetic that should have been done first: 600 bot games is roughly 15,000
+positions, still **~50x short** of what the method wants. The eight days would
+have bought a second noisy fit.
+
+What it actually took, all inside `engine/tools/tune.py` with `engine/`
+untouched:
+
+| | |
+| --- | --- |
+| `GameState.from_fen` on a 4-field EPD FEN | already worked — accepts >=4 fields, defaults the clock |
+| new code | `load_epd()`, ~60 lines, plus a per-position result label so both loaders feed one splitter |
+| uncached `evaluate()` | 20.1 us CPython vs **2.25 us PyPy** — 1.6 s per pass over 725k |
+| memory | **6.6 KB per `GameState`**, so 725k would need ~4.6 GB; the default samples 200,000 (~1.3 GB) |
+
+Sampling takes every Nth *block* of 512 lines rather than every Nth line, which
+keeps both properties that matter: blocks stay contiguous, so neighbouring
+positions from one game do not straddle the train/validation cut, and the blocks
+taken are spread through the file instead of being a prefix of it.
+
+Two cores go to running different `--seed` values side by side rather than into
+a worker pool inside one fit. The verification needs 3-4 seeds either way, so
+both spend the same hour, and seed-level parallelism costs no code and loses
+only one result if something crashes.
+
+**Nothing is applied yet.** Applying the values is a behavior change, and
+`PIECE_VALUES` is shared with the search's SEE, so it moves move ordering as
+well as scoring — that needs an SPRT, after the current validation run. The fit
+itself waits for the bot to be down, because ~30 min of a saturated core would
+starve the engine in the rated games that run exists to collect.
+
+The transferable lesson is not about chess: **when a tool appears to need data
+you do not have, check what its loader can read before going to collect any.**
+The measurement discipline in this repo is aimed at not believing bad numbers,
+and it worked — but it had nothing to say about a question that was never asked.
+
 ---
 
 ## Performance Benchmarks
