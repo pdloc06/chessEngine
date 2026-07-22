@@ -80,9 +80,21 @@ DEFAULT_ELO1 = 5.0
 DEFAULT_ALPHA = 0.05
 DEFAULT_BETA = 0.05
 
-# One game per physical core, leaving headroom; oversubscribing distorts the
-# time control, which silently corrupts the very thing being measured.
-DEFAULT_CONCURRENCY = 4
+# Memory, not cores, is what caps this — and getting it wrong does not look
+# like a resource problem. At 4 the whole match was unusable: both engines
+# overran the 60s clock by 130-210s and forfeited, with the overrun growing as
+# each game went on. That reads like a search bug, and it is not one. Each
+# engine holds a transposition table of up to `uci.TT_MAX_ENTRIES` (2M) plus
+# `eval._EVAL_CACHE` (1M), measured at 460-625 MB per process partway through a
+# single 114-ply game and still climbing. Concurrency N runs 2N engines, so 4
+# means 8 processes competing for 8 GB: the machine swaps, every search slows
+# by two orders of magnitude, and the clock is what notices. The caches grow
+# with the game, which is exactly why the overrun did too.
+#
+# 2 keeps four processes at ~2.5 GB and also matches the CPU guidance in
+# CLAUDE.md, which already records that 3 saturates this M2's four performance
+# cores. Raise it only on a machine with more RAM, not more cores.
+DEFAULT_CONCURRENCY = 2
 
 # A ply cap that no sane game reaches, as a backstop against a bug that makes
 # two engines shuffle forever.

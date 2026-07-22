@@ -146,8 +146,14 @@ PYTHONPATH=. uv run --no-project python -m engine.tools.sprt /tmp/baseline
   total is zero, nothing has been learned about any of them — two could be +30
   and three −20. Stage J was reverted with the commit message "never measured
   on its own".
-- Concurrency 3 saturates this machine (4 performance cores) and makes it
-  unusable; concurrency 1 keeps it responsive. Games are played in
+- **Concurrency is capped by memory, not cores, and overshooting it looks like
+  a search bug.** Each engine holds a 2M-entry transposition table plus a 1M
+  entry eval cache — 460-625 MB per process partway through one game, and
+  growing with the game. Concurrency N runs 2N engines, so the old default of 4
+  put 8 of them on 8 GB, the machine swapped, and *both* engines overran a 60s
+  clock by 130-210s and forfeited. `sprt.py` now defaults to 2. Separately,
+  concurrency 3 saturates this machine's four performance cores and makes it
+  unusable; 1 keeps it responsive. Games are played in
   colour-reversed pairs from `books/uho_5000.epd`, a seeded sample of
   Stockfish's UHO_Lichess_4852_v1 — unbalanced human openings cut the draw
   rate, which raises information per game.
