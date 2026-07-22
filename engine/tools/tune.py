@@ -32,9 +32,8 @@ Two things are therefore built in rather than optional:
 - **The split is by group, not by position.** Positions from one game are
   strongly correlated (same pawn structure, same material, same result), so a
   position-level split leaks the answer across it and makes validation error
-  meaninglessly optimistic. A group is one game for PGN input, and one
-  contiguous block of the file for EPD input, where neighbouring lines come
-  from the same game.
+  meaninglessly optimistic. A group is one contiguous block of the input file,
+  where neighbouring lines come from the same game.
 - **A parameter change is only kept if it improves error on groups the fit has
   never seen.** Training error always falls; that is what fitting does. Only
   the held-out number is evidence.
@@ -69,24 +68,29 @@ a result: applying these values is a behavior change, and `PIECE_VALUES` is
 shared with the search's static exchange evaluation, so it moves move ordering
 as well as scoring. That needs an SPRT, not a held-out error number.
 
+## Reading the answer
+
+One fit is a draw from a distribution, not a measurement. Run three or four
+`--seed` values and compare: if they disagree about *which way* a parameter
+should move, the fit is learning noise no matter how good the error looks.
+The bar this tool was built to clear is that the seeds agree.
+
+    printf '%s\\n' 1 2 3 4 | xargs -P 2 -I{} sh -c \\
+      'PYTHONPATH=. uv run --no-project -p pypy3.11 python -m engine.tools.tune \\
+         --seed {} > /tmp/tune-seed{}.log 2>&1'
+
+`-P 2` is the cap, and it is memory rather than cores that sets it — see the
+note on `DEFAULT_EPD_LIMIT`. Two seeds side by side halve the wall clock for
+the same reason a worker pool inside one fit would, and cost no code.
+
 Usage
 -----
     PYTHONPATH=. uv run --no-project -p pypy3.11 python -m engine.tools.tune
-    PYTHONPATH=. uv run --no-project python -m engine.tools.tune --games-dir DIR
 
 PyPy is worth the flag here: `evaluate()` is 2.25 us there against 20.1 us on
 CPython, and this loop does nothing else.
-
-The real ceiling is memory, not time. A `GameState` costs 5.6 KB under PyPy
-(6.6 KB on CPython), so the full 725k set would want ~3.9 GB while the default
-sample of 200,000 holds ~1.1 GB. This machine has 8 GB, which is why running
-two seeds side by side is the cap — see the parallel recipe in `CLAUDE.md`.
-Swapping matters more than it looks: if the bot is playing, a machine that
-starts paging can lose a rated game on time, which is worse than any amount of
-shallow search.
 """
 import argparse
-import glob
 import math
 import os
 import random
@@ -94,14 +98,7 @@ import sys
 from typing import Callable
 
 from engine import eval as ev
-from engine import pgn
 from engine.board import GameState
-from engine.movegen import generate_legal
-
-# Where lichess-bot writes its PGNs. Every game the bot has played is training
-# data, which is the one advantage of having run it for real.
-DEFAULT_GAMES_DIR = os.path.expanduser(
-    '~/PycharmProjects/lichess-bot/game_records')
 
 # The public labeled set, kept beside the other generated data rather than in
 # the repo: it is 39 MB of someone else's positions.
@@ -114,16 +111,20 @@ DEFAULT_EPD = os.path.expanduser(
 # block's edges can straddle a game, which at this size is noise.
 EPD_BLOCK_SIZE = 512
 
-# Positions sampled by default. The cap is memory, not time: ~6.6 KB per
-# GameState puts the full 725k file at ~4.6 GB, while 200,000 costs ~1.3 GB and
-# still gives ~6,450 positions per parameter.
+# Positions sampled by default, and the one number in this tool that is worth
+# getting right. The ceiling here is memory, not time: a `GameState` measures
+# 5.6 KB under PyPy (6.6 KB on CPython), so the full 725k file wants ~3.9 GB
+# while 200,000 costs ~1.1 GB and still gives ~5,100 training positions per
+# parameter. This machine has 8 GB, which is what caps parallel seeds at two.
+#
+# Swapping matters more than it looks. It does not announce itself as a memory
+# problem — it announces itself as whatever was being timed. The SPRT harness
+# lost a whole run to this, reading two engines that had each overrun a 60s
+# clock by three minutes; and if the bot is playing, a paging machine loses a
+# rated game outright, which is worse than any amount of shallow search.
 DEFAULT_EPD_LIMIT = 200_000
 
-# Positions from the opening book teach nothing about evaluation — the moves
-# were not ours and the position is still balanced by construction.
-SKIP_OPENING_PLIES = 16
-
-# Fraction of *games* held out. Games, not positions: see the module docstring.
+# Fraction of *groups* held out. Groups, not positions: see the module docstring.
 VALIDATION_FRACTION = 0.25
 
 # Seeded so a tuning run is reproducible and two runs can be compared.
@@ -132,9 +133,9 @@ SPLIT_SEED = 20260722
 RESULT_SCORE = {'1-0': 1.0, '0-1': 0.0, '1/2-1/2': 0.5}
 
 # One unit of the train/validation split: positions that belong together, and
-# the result each one is labeled with. A PGN game shares a single result across
-# all its positions; an EPD block carries one per line. Keeping the results per
-# position is what lets both loaders feed the same splitter.
+# the result each one is labeled with. The results are per position rather than
+# per group because an EPD file labels every line separately — a block is a
+# proxy for "same game", not a guarantee of one.
 Group = tuple[list[GameState], list[float]]
 
 
@@ -156,73 +157,6 @@ def sigmoid(score: float, k: float) -> float:
         Predicted score in [0, 1].
     """
     return 1.0 / (1.0 + math.pow(10.0, -k * score / 400.0))
-
-
-def load_positions(games_dir: str, limit: int | None = None) -> list[Group]:
-    """
-    Replay every PGN in a directory into positions labeled by game result.
-
-    Returns positions grouped *per game* so the caller can split by game.
-    Positions are filtered to the ones a static evaluation can say anything
-    useful about: past the opening book, not in check, and with no capture
-    available. That last test is a cheap stand-in for the usual "quiet
-    position" filter — a position with a hanging piece is scored by tactics
-    the evaluation cannot see, so including it teaches the fit nonsense.
-
-    Parameters
-    ----------
-    games_dir : str
-        Directory of `.pgn` files.
-    limit : int or None, optional
-        Stop after this many games. Useful for a quick smoke run.
-
-    Returns
-    -------
-    list of Group
-        One entry per game: its quiet positions, and the game's result repeated
-        once per position, as a score from White's perspective.
-    """
-    games: list[Group] = []
-    paths = sorted(glob.glob(os.path.join(games_dir, '*.pgn')))
-    if limit is not None:
-        paths = paths[:limit]
-
-    for path in paths:
-        try:
-            with open(path, encoding='utf-8') as handle:
-                text = handle.read()
-        except OSError:
-            continue
-        result = None
-        for line in text.splitlines():
-            if line.startswith('[Result '):
-                result = line.split('"')[1]
-                break
-        if result not in RESULT_SCORE:
-            continue
-
-        try:
-            final = pgn.game_from_pgn(text)
-        except Exception:            # noqa: BLE001 - a bad PGN is skipped
-            continue
-
-        # Replay from the start, keeping a snapshot of each quiet position.
-        moves = list(final.move_log)
-        board = GameState()
-        positions: list[GameState] = []
-        for ply, move in enumerate(moves):
-            board.make_move(move, annotate=False)
-            if ply < SKIP_OPENING_PLIES:
-                continue
-            legal = generate_legal(board, for_ai=True)
-            if not legal or board.in_check:
-                continue
-            if any(board.board[m[2]][m[3]] != 0 or m[4] >= 2 for m in legal):
-                continue          # a capture is available: not quiet
-            positions.append(GameState.from_fen(board.to_fen()))
-        if positions:
-            games.append((positions, [RESULT_SCORE[result]] * len(positions)))
-    return games
 
 
 def load_epd(path: str, limit: int | None = DEFAULT_EPD_LIMIT,
@@ -567,31 +501,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--epd', default=DEFAULT_EPD,
                         help='labeled EPD file to fit on (the default input)')
-    parser.add_argument('--games-dir', nargs='?', const=DEFAULT_GAMES_DIR,
-                        help='fit on our own PGNs instead of --epd; there are '
-                             'far too few of them to support a fit, so this is '
-                             'kept for comparison only')
-    parser.add_argument('--limit', type=int, default=None,
-                        help='cap the input: PGN games, or EPD positions '
-                             f'(default {DEFAULT_EPD_LIMIT:,} for EPD)')
+    parser.add_argument('--limit', type=int, default=DEFAULT_EPD_LIMIT,
+                        help='cap the positions sampled; 0 reads the whole '
+                             f'file (default {DEFAULT_EPD_LIMIT:,})')
     parser.add_argument('--rounds', type=int, default=12)
     parser.add_argument('--seed', type=int, default=SPLIT_SEED)
     args = parser.parse_args()
 
-    if args.games_dir:
-        print(f'reading games from {args.games_dir}')
-        groups = load_positions(args.games_dir, args.limit)
-    else:
-        if not os.path.exists(args.epd):
-            print(f'no EPD file at {args.epd}\n'
-                  'fetch it once with:\n'
-                  '  curl -Lo ' + args.epd + ' \\\n'
-                  '    https://raw.githubusercontent.com/KierenP/'
-                  'ChessTrainingSets/master/quiet-labeled.epd',
-                  file=sys.stderr)
-            raise SystemExit(1)
-        print(f'reading positions from {args.epd}')
-        groups = load_epd(args.epd, args.limit or DEFAULT_EPD_LIMIT)
+    if not os.path.exists(args.epd):
+        print(f'no EPD file at {args.epd}\n'
+              'fetch it once with:\n'
+              '  curl -Lo ' + args.epd + ' \\\n'
+              '    https://raw.githubusercontent.com/KierenP/'
+              'ChessTrainingSets/master/quiet-labeled.epd',
+              file=sys.stderr)
+        raise SystemExit(1)
+    print(f'reading positions from {args.epd}')
+    # 0 means "no cap", which is the only way the command line can reach
+    # load_epd's limit=None. Read the memory note on DEFAULT_EPD_LIMIT first.
+    groups = load_epd(args.epd, args.limit or None)
     if not groups:
         print('no usable positions found', file=sys.stderr)
         raise SystemExit(1)
